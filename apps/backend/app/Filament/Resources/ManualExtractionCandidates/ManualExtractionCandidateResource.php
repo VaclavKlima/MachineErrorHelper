@@ -50,7 +50,8 @@ class ManualExtractionCandidateResource extends Resource
     {
         $count = ManualExtractionCandidate::query()
             ->where('status', 'pending')
-            ->where('review_score', '>=', 0.55)
+            ->where('review_priority', 'high')
+            ->where('review_score', '>=', 0.78)
             ->count();
 
         return $count > 0 ? (string) $count : null;

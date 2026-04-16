@@ -50,6 +50,16 @@ Use when:
 
 Gemini should return structured output with code candidates and confidence.
 
+Current Merlo dashboard prompt guidance:
+
+- Read the top green header as `MODULE - controller/id`.
+- Use only the text before the dash as `module_key`, for example `PLUG_SA`, `UGSS_S`, `UGM`, or `UCTI`.
+- Store the text after the dash as `controller_identifier`, for example `CU533`, `117006`, `14871`, or `124512`.
+- Treat `SW:` and `SN:` rows as metadata, never as diagnostic codes.
+- Extract active errors from the small colored badges under `List of errors` in the blue panel.
+- Preserve leading zeroes in badges, for example `002`, `003`, `007`, `011`, `022`, and `029`.
+- Return every visible badge as a separate error, including low-confidence badges affected by glare or angle.
+
 ### Manual Search Fallback
 
 If no exact code is found:
@@ -64,8 +74,9 @@ If no exact code is found:
 2. Normalize aliases, for example `PLUG_SA` to `PLUGSA`.
 3. Exact structured match against approved `diagnostic_entries`.
 4. If user provided software version, prefer entries effective for that version.
-5. If multiple close candidates exist, ask user to confirm the module/code.
-6. If no structured match is reliable, show manual search results and ask user to upload a clearer image or enter the code manually.
+5. If a module is known or manually confirmed, do not fall back to a code-only match from another module.
+6. If multiple close candidates exist, ask user to confirm the module/code.
+7. If no structured match is reliable, show manual search results and ask user to upload a clearer image or enter the code manually.
 
 ## Confidence
 

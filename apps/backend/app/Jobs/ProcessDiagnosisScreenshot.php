@@ -48,6 +48,7 @@ class ProcessDiagnosisScreenshot implements ShouldQueue
             'selected_diagnostic_entry_id' => $singleResolvedCandidate?->matched_diagnostic_entry_id,
             'result_payload' => [
                 'module_key' => $extraction['module_key'],
+                'controller_identifier' => $extraction['controller_identifier'],
                 'software_version' => $extraction['software_version'],
                 'serial_number' => $extraction['serial_number'],
                 'visible_errors_count' => count($extraction['errors'] ?? []),

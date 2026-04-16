@@ -98,10 +98,9 @@ class DiagnosisController extends Controller
         ]);
 
         $codes = $this->extractManualCodes($data);
-        $moduleKey = isset($data['module_key'])
-            ? Str::upper(preg_replace('/[^A-Z0-9]+/i', '', $data['module_key']))
-            : null;
+        $moduleKey = $this->normalizeModuleKey((string) ($data['module_key'] ?? ''));
         $matchedCandidates = 0;
+        $candidateConfidences = [];
 
         $diagnosis->candidates()->delete();
 
@@ -118,11 +117,14 @@ class DiagnosisController extends Controller
                 $matchedCandidates++;
             }
 
+            $confidence = $match ? 1.0 : 0.6;
+            $candidateConfidences[] = $confidence;
+
             $diagnosis->candidates()->create([
                 'candidate_code' => $code,
                 'normalized_code' => $normalizedCode,
                 'source' => 'manual_entry',
-                'confidence' => $match ? 1.0 : 0.6,
+                'confidence' => $confidence,
                 'matched_diagnostic_entry_id' => $match?->id,
                 'metadata' => array_filter([
                     'module_key' => $moduleKey,
@@ -138,6 +140,9 @@ class DiagnosisController extends Controller
         $diagnosis->update([
             'selected_diagnostic_entry_id' => $singleResolvedCode?->matched_diagnostic_entry_id,
             'status' => $singleResolvedCode ? 'resolved' : 'needs_confirmation',
+            'confidence' => count($candidateConfidences) > 0
+                ? round(array_sum($candidateConfidences) / count($candidateConfidences), 4)
+                : null,
             'result_payload' => array_filter([
                 'module_key' => $moduleKey,
                 'visible_errors_count' => count($codes),
@@ -146,7 +151,7 @@ class DiagnosisController extends Controller
                 'message' => count($codes) > 1
                     ? 'Multiple manual error codes were entered for this module.'
                     : 'Manual error code was entered.',
-            ]),
+            ], fn ($value): bool => $value !== null && $value !== ''),
         ]);
 
         return $this->show($diagnosis->refresh());
@@ -204,6 +209,8 @@ class DiagnosisController extends Controller
             if ($moduleMatch) {
                 return [$moduleMatch, 'module_and_code'];
             }
+
+            return [null, 'module_and_code_not_found'];
         }
 
         return [
@@ -215,6 +222,20 @@ class DiagnosisController extends Controller
     private function normalizeDiagnosticCode(string $code): string
     {
         return Str::upper(preg_replace('/\s+/', '', trim($code)) ?? trim($code));
+    }
+
+    private function normalizeModuleKey(string $module): ?string
+    {
+        $cleaned = trim($module);
+
+        if ($cleaned === '') {
+            return null;
+        }
+
+        $moduleOnly = preg_replace('/\s*[-–—]\s*[A-Z]*\d[A-Z0-9\/._-]*\s*$/iu', '', $cleaned) ?: $cleaned;
+        $normalized = Str::upper(preg_replace('/[^A-Z0-9]+/iu', '', trim($moduleOnly)) ?? trim($moduleOnly));
+
+        return $normalized !== '' ? $normalized : null;
     }
 
     /**

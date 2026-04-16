@@ -70,12 +70,13 @@ class ManualExtractionCandidatesTable
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
             ->filters([
-                Filter::make('actionable')
-                    ->label('Actionable only')
+                Filter::make('high_confidence_queue')
+                    ->label('High-confidence queue')
                     ->default()
                     ->query(fn (Builder $query): Builder => $query
                         ->where('status', 'pending')
-                        ->where('review_score', '>=', 0.55)),
+                        ->where('review_priority', 'high')
+                        ->where('review_score', '>=', 0.78)),
                 SelectFilter::make('status')
                     ->options([
                         'pending' => 'Pending review',
@@ -93,6 +94,7 @@ class ManualExtractionCandidatesTable
                     ]),
                 SelectFilter::make('extractor')
                     ->options([
+                        'generic_diagnostic_block' => 'Diagnostic block',
                         'generic_section_table' => 'Table parser',
                         'generic_text_reference' => 'Text parser',
                         'gemini_structured_chunk' => 'Gemini',

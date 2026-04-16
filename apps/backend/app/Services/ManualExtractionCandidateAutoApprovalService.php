@@ -13,20 +13,29 @@ class ManualExtractionCandidateAutoApprovalService
         private readonly ManualExtractionCandidateApprovalService $approvalService,
     ) {}
 
-    public function countForManual(?Manual $manual = null, float $minimumScore = 0.85): int
+    public function countForManual(?Manual $manual = null, float $minimumScore = 0.78): int
     {
         return $this->query($manual, $minimumScore)->count();
     }
 
-    public function approveForManual(?Manual $manual = null, ?User $user = null, float $minimumScore = 0.85): int
+    public function approveForManual(?Manual $manual = null, ?User $user = null, float $minimumScore = 0.78): int
     {
         $approved = 0;
 
-        $this->query($manual, $minimumScore)
+        $ids = $this->query($manual, $minimumScore)
             ->orderByDesc('review_score')
+            ->orderBy('id')
+            ->pluck('id');
+
+        ManualExtractionCandidate::query()
+            ->whereIn('id', $ids)
             ->orderBy('id')
             ->chunkById(100, function ($candidates) use ($user, &$approved): void {
                 foreach ($candidates as $candidate) {
+                    if ($candidate->status !== 'pending') {
+                        continue;
+                    }
+
                     $this->approvalService->approve($candidate, $user);
                     $approved++;
                 }
@@ -35,7 +44,7 @@ class ManualExtractionCandidateAutoApprovalService
         return $approved;
     }
 
-    public function query(?Manual $manual = null, float $minimumScore = 0.85): Builder
+    public function query(?Manual $manual = null, float $minimumScore = 0.78): Builder
     {
         return ManualExtractionCandidate::query()
             ->where('status', 'pending')

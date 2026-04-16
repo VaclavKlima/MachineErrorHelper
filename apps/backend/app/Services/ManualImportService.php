@@ -129,6 +129,14 @@ class ManualImportService
                         $moduleKey,
                     );
 
+                    $suggestions += $this->suggestDiagnosticBlockEntries(
+                        $manual,
+                        $chunk,
+                        $pageNumber,
+                        $currentSectionTitle,
+                        $moduleKey,
+                    );
+
                     if (
                         $aiExtractor->enabled()
                         && $aiChunks < $maxAiChunks
@@ -358,6 +366,85 @@ class ManualImportService
         return $created;
     }
 
+    private function suggestDiagnosticBlockEntries(
+        Manual $manual,
+        ManualChunk $chunk,
+        int $pageNumber,
+        ?string $sectionTitle,
+        ?string $moduleKey,
+    ): int {
+        $created = 0;
+        $context = array_filter([
+            'module' => $moduleKey,
+            'section_title' => $sectionTitle,
+            'manual_language' => $manual->language,
+            'coverage_mode' => $manual->coverage_mode,
+        ]);
+
+        foreach ($this->extractDiagnosticBlocks($chunk->content) as $block) {
+            $primaryCode = $this->normalizeNumericIdentifier($block['error_number']);
+            $normalizedCode = $this->normalizeCode($primaryCode);
+            $fields = $block['fields'];
+            $meaning = $this->cleanExtractedSentence($fields['fault'] ?? '');
+            $cause = $this->cleanExtractedSentence($fields['cause'] ?? '');
+            $recommendedAction = $this->cleanExtractedSentence($fields['action'] ?? '');
+            $title = $this->cleanExtractedSentence($block['title'] ?: $meaning);
+
+            if ($meaning === '' || $this->isLayoutNoise($meaning)) {
+                continue;
+            }
+
+            $identifiers = array_filter([
+                'code' => $normalizedCode,
+                'error_number' => $normalizedCode,
+                'indicator_code' => isset($block['indicator_code']) ? $this->normalizeCode($block['indicator_code']) : null,
+            ]);
+
+            $candidateContext = array_filter(array_merge($context, [
+                'indicator_code' => $identifiers['indicator_code'] ?? null,
+                'neutral_effect' => $this->cleanExtractedSentence($fields['neutral_effect'] ?? ''),
+                'driving_effect' => $this->cleanExtractedSentence($fields['driving_effect'] ?? ''),
+                'reset_condition' => $this->cleanExtractedSentence($fields['reset_condition'] ?? ''),
+            ]));
+
+            $candidate = [
+                'machine_id' => $manual->machine_id,
+                'manual_id' => $manual->id,
+                'manual_page_id' => $chunk->manual_page_id,
+                'manual_chunk_id' => $chunk->id,
+                'candidate_type' => 'diagnostic_entry_block',
+                'code' => $primaryCode,
+                'normalized_code' => $normalizedCode,
+                'family' => $moduleKey,
+                'module_key' => $moduleKey,
+                'section_title' => $sectionTitle,
+                'primary_code' => $primaryCode,
+                'context' => $candidateContext,
+                'identifiers' => $identifiers,
+                'title' => Str::limit($title, 250, ''),
+                'meaning' => $meaning,
+                'cause' => $cause !== '' ? $cause : null,
+                'recommended_action' => $recommendedAction !== '' ? $recommendedAction : null,
+                'source_text' => $block['source_text'],
+                'source_page_number' => $pageNumber,
+                'extractor' => 'generic_diagnostic_block',
+                'confidence' => $this->scoreDiagnosticBlockCandidate($normalizedCode, $meaning, $recommendedAction, $candidateContext, $identifiers),
+                'metadata' => [
+                    'table_shape' => 'single_error_block',
+                    'chunk_heading' => $chunk->heading,
+                    'section_title' => $sectionTitle,
+                    'parsed_fields' => array_filter($fields),
+                ],
+            ];
+
+            ManualExtractionCandidate::create($this->withReviewClassification($candidate));
+
+            $created++;
+        }
+
+        return $created;
+    }
+
     private function suggestTextDiagnosticEntries(
         Manual $manual,
         ManualChunk $chunk,
@@ -465,6 +552,161 @@ class ManualImportService
         }
 
         return $candidates;
+    }
+
+    /**
+     * Manuals sometimes describe one diagnostic code per mini-table instead of
+     * using a single table with many codes. Example markers:
+     * "ČÍSLO CHYBY 12" and "KÓD CHYBY [ŽLUTÁ LED] 001100 Engine can - bus off".
+     *
+     * @return array<int, array{
+     *     error_number: string,
+     *     indicator_code?: string,
+     *     title: string,
+     *     fields: array<string, string>,
+     *     source_text: string
+     * }>
+     */
+    private function extractDiagnosticBlocks(string $content): array
+    {
+        $lines = preg_split('/\R/u', str_replace("\f", "\n", $content)) ?: [];
+        $blocks = [];
+        $current = null;
+
+        foreach ($lines as $line) {
+            $trimmed = trim($line);
+
+            if ($trimmed === '') {
+                if ($current !== null) {
+                    $current['lines'][] = '';
+                }
+
+                continue;
+            }
+
+            if (preg_match('/\b(?:ČÍSLO|CISLO)\s+CHYBY\s+(?<code>\d{1,6})\b/iu', $trimmed, $matches) === 1) {
+                if ($current !== null) {
+                    $blocks[] = $this->parseDiagnosticBlock($current);
+                }
+
+                $current = [
+                    'error_number' => $matches['code'],
+                    'lines' => [$line],
+                ];
+
+                continue;
+            }
+
+            if ($current !== null) {
+                $current['lines'][] = $line;
+            }
+        }
+
+        if ($current !== null) {
+            $blocks[] = $this->parseDiagnosticBlock($current);
+        }
+
+        return array_values(array_filter($blocks, fn (?array $block): bool => $block !== null));
+    }
+
+    /**
+     * @param  array{error_number: string, lines: array<int, string>}  $block
+     * @return array{
+     *     error_number: string,
+     *     indicator_code?: string,
+     *     title: string,
+     *     fields: array<string, string>,
+     *     source_text: string
+     * }|null
+     */
+    private function parseDiagnosticBlock(array $block): ?array
+    {
+        $fields = [];
+        $currentField = null;
+        $indicatorCode = null;
+        $title = '';
+        $sourceLines = [];
+
+        foreach ($block['lines'] as $line) {
+            $trimmed = trim($line);
+
+            if ($trimmed === '' || $this->isLayoutNoise($trimmed) || $this->isWatermarkLine($trimmed, null)) {
+                continue;
+            }
+
+            $sourceLines[] = $line;
+
+            if (preg_match('/\bK[ÓO]D\s+CHYBY\b.*?\s(?<indicator>(?:0x[0-9A-F]+|[01]{3,}|\d{3,}))\s+(?<title>.+)$/iu', $trimmed, $matches) === 1) {
+                $indicatorCode = $matches['indicator'];
+                $title = $this->cleanExtractedSentence($matches['title']);
+                $currentField = null;
+
+                continue;
+            }
+
+            if (preg_match('/\b(?:ČÍSLO|CISLO)\s+CHYBY\b/iu', $trimmed) === 1) {
+                $currentField = null;
+
+                continue;
+            }
+
+            [$field, $value] = $this->extractDiagnosticBlockField($trimmed);
+
+            if ($field !== null) {
+                $currentField = $field;
+
+                if ($value !== '') {
+                    $fields[$field] = trim(($fields[$field] ?? '').' '.$value);
+                }
+
+                continue;
+            }
+
+            if ($currentField !== null) {
+                $fields[$currentField] = trim(($fields[$currentField] ?? '').' '.$trimmed);
+            }
+        }
+
+        if (($fields['fault'] ?? '') === '') {
+            return null;
+        }
+
+        $result = [
+            'error_number' => $block['error_number'],
+            'indicator_code' => $indicatorCode,
+            'title' => $title,
+            'fields' => array_map(fn (string $value): string => $this->cleanExtractedSentence($value), $fields),
+            'source_text' => trim(implode("\n", $sourceLines)),
+        ];
+
+        if ($result['indicator_code'] === null || $result['indicator_code'] === '') {
+            unset($result['indicator_code']);
+        }
+
+        return $result;
+    }
+
+    /**
+     * @return array{0: string|null, 1: string}
+     */
+    private function extractDiagnosticBlockField(string $line): array
+    {
+        $labels = [
+            'fault' => 'Zjištěná\s+závada',
+            'cause' => 'Pravděpodobná\s+příčina',
+            'neutral_effect' => 'Hydrostatický\s+náhon\s*:\s*V\s+neutrálu',
+            'driving_effect' => 'Hydrostatický\s+náhon\s*:\s*Za\s+jízdy',
+            'reset_condition' => 'Ukončení\s+signalizace',
+            'action' => 'Možné\s+řešení',
+        ];
+
+        foreach ($labels as $field => $label) {
+            if (preg_match('/^'.$label.'(?:\s+(?<value>.*))?$/iu', $line, $matches) === 1) {
+                return [$field, trim($matches['value'] ?? '')];
+            }
+        }
+
+        return [null, ''];
     }
 
     private function containsDiagnosticTextReference(string $text): bool
@@ -812,6 +1054,15 @@ class ManualImportService
     private function scoreTextCandidate(string $code, string $title, string $recommendedAction, array $context = [], array $identifiers = []): float
     {
         return round(max($this->scoreCandidate($code, $title, $recommendedAction, $context, $identifiers) - 0.18, 0.35), 4);
+    }
+
+    /**
+     * @param  array<string, mixed>  $context
+     * @param  array<string, string>  $identifiers
+     */
+    private function scoreDiagnosticBlockCandidate(string $code, string $title, string $recommendedAction, array $context = [], array $identifiers = []): float
+    {
+        return round(min($this->scoreCandidate($code, $title, $recommendedAction, $context, $identifiers) + 0.12, 0.98), 4);
     }
 
     private function detectSectionTitle(string $text): ?string
