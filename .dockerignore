@@ -1,0 +1,15 @@
+.git
+**/.env
+**/.env.*
+!**/.env.example
+**/node_modules
+**/vendor
+apps/backend/storage/app/*
+apps/backend/storage/framework/cache/*
+apps/backend/storage/framework/sessions/*
+apps/backend/storage/framework/testing/*
+apps/backend/storage/framework/views/*
+apps/backend/storage/logs/*
+apps/backend/bootstrap/cache/*.php
+apps/mobile/.expo
+apps/mobile/dist
