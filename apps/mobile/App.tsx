@@ -1,14 +1,14 @@
 import { QueryClient, QueryClientProvider, useMutation, useQuery } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
   Easing,
   Image as RNImage,
-  ImageBackground,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   SafeAreaView,
@@ -16,15 +16,241 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
+import type { NativeSyntheticEvent, TextInputKeyPressEventData } from 'react-native';
 import { z } from 'zod';
 
 const queryClient = new QueryClient();
 const apiBaseUrl = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8090/api';
-const workshopImage = {
-  uri: 'https://images.unsplash.com/photo-1581093458791-9d09eaf942e9?auto=format&fit=crop&w=1400&q=82',
+const authTokenStorageKey = 'machine-error-helper.auth-token';
+const selectedMachineStoragePrefix = 'machine-error-helper.selected-machine';
+const cloudInputRange = [0, 0.25, 0.5, 0.75, 1];
+const cloudPhaseFrames = [0, 1.35, 2.7, 4.05, 0];
+const cloudAnimationDurationMs = 76000;
+const cloudPhaseSpeed = 0.000032;
+
+type DotTone = 'ghost' | 'dim' | 'mid' | 'bright' | 'cyan' | 'blue' | 'violet' | 'aqua';
+type DotCell = {
+  key: string;
+  tone: DotTone;
+  opacityFrames: number[];
 };
+type DotMeshSpec = {
+  cellSize: number;
+  height: number;
+  rows: DotCell[][];
+  width: number;
+};
+type CanvasDot = {
+  accentStrength: number;
+  column: number;
+  row: number;
+  tone: DotTone;
+  x: number;
+  xNorm: number;
+  y: number;
+  yNorm: number;
+};
+type CanvasDotSpec = {
+  cellSize: number;
+  dots: CanvasDot[];
+  height: number;
+  width: number;
+};
+
+function seededNoise(row: number, column: number, phase: number): number {
+  const value = Math.sin(column * 12.9898 + row * 78.233 + phase * 37.719) * 43758.5453;
+
+  return value - Math.floor(value);
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function smoothstep(edge0: number, edge1: number, value: number): number {
+  const t = clamp((value - edge0) / (edge1 - edge0), 0, 1);
+
+  return t * t * (3 - 2 * t);
+}
+
+function cloudNoise(x: number, y: number, row: number, column: number, phase: number): number {
+  const diagonalA = Math.sin((x * 3.4 - y * 4.9 + phase * 1.15) * Math.PI);
+  const diagonalB = Math.sin((x * 5.1 + y * 2.6 - phase * 0.9 + 0.65) * Math.PI);
+  const broadCloud = Math.sin((x * 1.8 + y * 2.2 + phase * 0.65 + 1.7) * Math.PI);
+  const fineCloud = Math.sin((x * 6.2 - y * 5.8 + phase * 1.2) * Math.PI) * 0.08;
+  const grain = (seededNoise(row, column, Math.floor(phase * 0.5)) - 0.5) * 0.08;
+
+  return (diagonalA * 0.36 + diagonalB * 0.28 + broadCloud * 0.28 + fineCloud + grain + 1) / 2;
+}
+
+function dotOpacityAt(x: number, y: number, row: number, column: number, phase: number): number {
+  const cloud = smoothstep(0.46, 0.86, cloudNoise(x, y, row, column, phase));
+  const darkCore = Math.exp(-(((x - 0.48) / 0.22) ** 2 + ((y - 0.52) / 0.3) ** 2));
+  const puddles = colorPuddlesAt(x, y);
+  const puddleGlow = Math.max(puddles.cyan, puddles.blue, puddles.violet, puddles.aqua);
+  const edgeX = smoothstep(0.02, 0.18, x) * (1 - smoothstep(0.82, 0.99, x));
+  const edgeY = smoothstep(0.02, 0.16, y) * (1 - smoothstep(0.86, 0.99, y));
+  const edgeCalm = clamp(edgeX * edgeY, 0, 1);
+  const shapedCloud = cloud * (1 - darkCore * 0.86) * (0.18 + edgeCalm * 0.82);
+
+  return clamp(0.035 + shapedCloud * 0.86 + puddleGlow * 0.13 * edgeCalm, 0.025, 0.94);
+}
+
+function colorPuddlesAt(x: number, y: number): { aqua: number; blue: number; cyan: number; violet: number } {
+  return {
+    aqua: Math.exp(-(((x - 0.18) / 0.18) ** 2 + ((y - 0.78) / 0.16) ** 2)),
+    blue: Math.max(
+      Math.exp(-(((x - 0.24) / 0.18) ** 2 + ((y - 0.28) / 0.16) ** 2)),
+      Math.exp(-(((x - 0.66) / 0.16) ** 2 + ((y - 0.72) / 0.2) ** 2)) * 0.75,
+    ),
+    cyan: Math.max(
+      Math.exp(-(((x - 0.86) / 0.14) ** 2 + ((y - 0.4) / 0.16) ** 2)),
+      Math.exp(-(((x - 0.5) / 0.12) ** 2 + ((y - 0.2) / 0.14) ** 2)) * 0.68,
+    ),
+    violet: Math.exp(-(((x - 0.7) / 0.16) ** 2 + ((y - 0.18) / 0.16) ** 2)) * 0.72,
+  };
+}
+
+function dominantPuddleTone(puddles: ReturnType<typeof colorPuddlesAt>): { strength: number; tone: DotTone } {
+  const entries: Array<{ strength: number; tone: DotTone }> = [
+    { strength: puddles.cyan, tone: 'cyan' },
+    { strength: puddles.blue, tone: 'blue' },
+    { strength: puddles.violet, tone: 'violet' },
+    { strength: puddles.aqua, tone: 'aqua' },
+  ];
+
+  return entries.reduce((best, entry) => (entry.strength > best.strength ? entry : best), { strength: 0, tone: 'ghost' as DotTone });
+}
+
+function lerp(start: number, end: number, amount: number): number {
+  return start + (end - start) * amount;
+}
+
+function dotCellSizeForViewport(width: number): number {
+  if (width < 480) {
+    return 5;
+  }
+
+  if (width < 900) {
+    return 6;
+  }
+
+  if (width < 1400) {
+    return 7;
+  }
+
+  return 8;
+}
+
+function buildDotMesh(columns: number, rows: number): DotCell[][] {
+  return Array.from({ length: rows }, (_, rowIndex) => {
+    const y = rows <= 1 ? 0 : rowIndex / (rows - 1);
+
+    return Array.from({ length: columns }, (_, columnIndex) => {
+      const x = columns <= 1 ? 0 : columnIndex / (columns - 1);
+      const accent = dominantPuddleTone(colorPuddlesAt(x, y));
+      const opacityFrames = cloudPhaseFrames.map((phase) => dotOpacityAt(x, y, rowIndex, columnIndex, phase));
+      const peakOpacity = Math.max(...opacityFrames);
+      let tone: DotTone = 'ghost';
+
+      if (accent.strength > 0.38 && peakOpacity > 0.32) {
+        tone = accent.tone;
+      } else if (peakOpacity > 0.82) {
+        tone = 'bright';
+      } else if (peakOpacity > 0.58) {
+        tone = 'mid';
+      } else if (peakOpacity > 0.28) {
+        tone = 'dim';
+      }
+
+      return {
+        key: `${rowIndex}-${columnIndex}`,
+        opacityFrames,
+        tone,
+      };
+    });
+  });
+}
+
+function buildDotMeshSpec(viewportWidth: number, viewportHeight: number): DotMeshSpec {
+  const cellSize = dotCellSizeForViewport(viewportWidth);
+  const overscan = cellSize * 10;
+  const columns = Math.ceil((viewportWidth + overscan * 2) / cellSize);
+  const rows = Math.ceil((viewportHeight + overscan * 2) / cellSize);
+
+  return {
+    cellSize,
+    height: rows * cellSize,
+    rows: buildDotMesh(columns, rows),
+    width: columns * cellSize,
+  };
+}
+
+function buildCanvasDotSpec(viewportWidth: number, viewportHeight: number): CanvasDotSpec {
+  const cellSize = dotCellSizeForViewport(viewportWidth);
+  const overscan = cellSize * 10;
+  const columns = Math.ceil((viewportWidth + overscan * 2) / cellSize);
+  const rows = Math.ceil((viewportHeight + overscan * 2) / cellSize);
+  const dots: CanvasDot[] = [];
+
+  for (let row = 0; row < rows; row += 1) {
+    const yNorm = rows <= 1 ? 0 : row / (rows - 1);
+
+    for (let column = 0; column < columns; column += 1) {
+      const xNorm = columns <= 1 ? 0 : column / (columns - 1);
+      const accent = dominantPuddleTone(colorPuddlesAt(xNorm, yNorm));
+
+      dots.push({
+        accentStrength: accent.strength,
+        column,
+        row,
+        tone: accent.tone,
+        x: column * cellSize + cellSize / 2,
+        xNorm,
+        y: row * cellSize + cellSize / 2,
+        yNorm,
+      });
+    }
+  }
+
+  return {
+    cellSize,
+    dots,
+    height: rows * cellSize,
+    width: columns * cellSize,
+  };
+}
+
+class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+  ) {
+    super(message);
+  }
+}
+
+const authUserSchema = z.object({
+  id: z.number(),
+  name: z.string(),
+  email: z.string().email(),
+});
+
+const loginResponseSchema = z.object({
+  data: z.object({
+    token: z.string(),
+    user: authUserSchema,
+  }),
+});
+
+const meResponseSchema = z.object({
+  data: z.object({
+    user: authUserSchema,
+  }),
+});
 
 const machineSchema = z.object({
   id: z.number(),
@@ -36,6 +262,10 @@ const machineSchema = z.object({
 
 const machinesResponseSchema = z.object({
   data: z.array(machineSchema),
+});
+
+const machineResponseSchema = z.object({
+  data: machineSchema,
 });
 
 const diagnosisCreateSchema = z.object({
@@ -91,8 +321,15 @@ type DiagnosisCreate = z.infer<typeof diagnosisCreateSchema>;
 type DiagnosisDetail = z.infer<typeof diagnosisDetailSchema>['data'];
 type DiagnosisCandidate = z.infer<typeof diagnosisCandidateSchema>;
 type DiagnosticEntry = z.infer<typeof diagnosticEntrySchema>;
+type AuthUser = z.infer<typeof authUserSchema>;
 type ImageSource = 'camera' | 'library';
-type WizardStep = 'machine' | 'upload' | 'confirm' | 'result';
+type ScreenshotPreviewSource = {
+  height?: number | null;
+  uri: string;
+  width?: number | null;
+};
+type AppPage = 'dashboard' | 'machines' | 'diagnosis';
+type DiagnosisStep = 'upload' | 'confirm' | 'result';
 type ImageQualityStatus = 'pass' | 'warn' | 'fail';
 type ImageQuality = {
   status: ImageQualityStatus;
@@ -100,8 +337,11 @@ type ImageQuality = {
   messages: string[];
 };
 
-const steps: Array<{ id: WizardStep; title: string }> = [
-  { id: 'machine', title: 'Machine' },
+function sortMachinesByName(machines: Machine[]): Machine[] {
+  return [...machines].sort((first, second) => first.name.localeCompare(second.name));
+}
+
+const diagnosisSteps: Array<{ id: DiagnosisStep; title: string }> = [
   { id: 'upload', title: 'Screenshot' },
   { id: 'confirm', title: 'Confirm codes' },
   { id: 'result', title: 'Result' },
@@ -113,21 +353,165 @@ async function parseJsonResponse<T>(response: Response, schema: z.ZodType<T>, fa
   if (!response.ok) {
     const message = typeof payload?.message === 'string' ? payload.message : fallbackMessage;
 
-    throw new Error(message);
+    throw new ApiError(message, response.status);
   }
 
   return schema.parse(payload);
 }
 
-async function fetchMachines(): Promise<Machine[]> {
-  const response = await fetch(`${apiBaseUrl}/machines`);
+function authHeaders(token: string): Record<string, string> {
+  return {
+    Accept: 'application/json',
+    Authorization: `Bearer ${token}`,
+  };
+}
+
+function resolveAssetUrl(url: string): string {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) {
+    return url;
+  }
+
+  const apiOrigin = apiBaseUrl.replace(/\/api\/?$/, '');
+
+  return new URL(url, `${apiOrigin}/`).toString();
+}
+
+function getBrowserStorage(): Storage | null {
+  try {
+    return typeof globalThis.localStorage === 'undefined' ? null : globalThis.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+async function readStoredAuthToken(): Promise<string | null> {
+  return getBrowserStorage()?.getItem(authTokenStorageKey) ?? null;
+}
+
+async function storeAuthToken(token: string): Promise<void> {
+  getBrowserStorage()?.setItem(authTokenStorageKey, token);
+}
+
+async function forgetAuthToken(): Promise<void> {
+  getBrowserStorage()?.removeItem(authTokenStorageKey);
+}
+
+function selectedMachineStorageKey(userId: number): string {
+  return `${selectedMachineStoragePrefix}.${userId}`;
+}
+
+function readStoredMachineId(userId: number): number | null {
+  const value = getBrowserStorage()?.getItem(selectedMachineStorageKey(userId));
+  const parsed = value ? Number(value) : Number.NaN;
+
+  return Number.isInteger(parsed) ? parsed : null;
+}
+
+function storeSelectedMachineId(userId: number, machineId: number): void {
+  getBrowserStorage()?.setItem(selectedMachineStorageKey(userId), String(machineId));
+}
+
+function forgetSelectedMachineId(userId: number): void {
+  getBrowserStorage()?.removeItem(selectedMachineStorageKey(userId));
+}
+
+async function loginToApi(input: { email: string; password: string }): Promise<{ token: string; user: AuthUser }> {
+  const response = await fetch(`${apiBaseUrl}/login`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      email: input.email,
+      password: input.password,
+      device_name: Platform.OS === 'web' ? 'web-app' : `${Platform.OS}-app`,
+    }),
+  });
+
+  const payload = await parseJsonResponse(response, loginResponseSchema, 'Could not log in.');
+
+  return payload.data;
+}
+
+async function registerWithApi(input: { name: string; email: string; password: string; passwordConfirmation: string }): Promise<{ token: string; user: AuthUser }> {
+  const response = await fetch(`${apiBaseUrl}/register`, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      name: input.name,
+      email: input.email,
+      password: input.password,
+      password_confirmation: input.passwordConfirmation,
+      device_name: Platform.OS === 'web' ? 'web-app' : `${Platform.OS}-app`,
+    }),
+  });
+
+  const payload = await parseJsonResponse(response, loginResponseSchema, 'Could not create account.');
+
+  return payload.data;
+}
+
+async function fetchCurrentUser(token: string): Promise<AuthUser> {
+  const response = await fetch(`${apiBaseUrl}/me`, {
+    headers: authHeaders(token),
+  });
+  const payload = await parseJsonResponse(response, meResponseSchema, 'Could not load user.');
+
+  return payload.data.user;
+}
+
+async function logoutFromApi(token: string): Promise<void> {
+  await fetch(`${apiBaseUrl}/logout`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  }).catch(() => null);
+}
+
+async function fetchMachines(token: string, search: string): Promise<Machine[]> {
+  const response = await fetch(`${apiBaseUrl}/machines?search=${encodeURIComponent(search)}`, {
+    headers: authHeaders(token),
+  });
   const payload = await parseJsonResponse(response, machinesResponseSchema, 'Could not load machines.');
 
   return payload.data;
 }
 
-async function fetchDiagnosis(id: string): Promise<DiagnosisDetail> {
-  const response = await fetch(`${apiBaseUrl}/diagnoses/${id}`);
+async function fetchUserMachines(token: string): Promise<Machine[]> {
+  const response = await fetch(`${apiBaseUrl}/user/machines`, {
+    headers: authHeaders(token),
+  });
+  const payload = await parseJsonResponse(response, machinesResponseSchema, 'Could not load your machines.');
+
+  return payload.data;
+}
+
+async function attachUserMachine(input: { machineId: number; token: string }): Promise<Machine> {
+  const response = await fetch(`${apiBaseUrl}/user/machines/${input.machineId}`, {
+    method: 'POST',
+    headers: authHeaders(input.token),
+  });
+  const payload = await parseJsonResponse(response, machineResponseSchema, 'Could not add machine.');
+
+  return payload.data;
+}
+
+async function detachUserMachine(input: { machineId: number; token: string }): Promise<void> {
+  const response = await fetch(`${apiBaseUrl}/user/machines/${input.machineId}`, {
+    method: 'DELETE',
+    headers: authHeaders(input.token),
+  });
+
+  await parseJsonResponse(response, z.unknown(), 'Could not remove machine.');
+}
+
+async function fetchDiagnosis(id: string, token: string): Promise<DiagnosisDetail> {
+  const response = await fetch(`${apiBaseUrl}/diagnoses/${id}`, {
+    headers: authHeaders(token),
+  });
   const payload = await parseJsonResponse(response, diagnosisDetailSchema, 'Could not load diagnosis.');
 
   return payload.data;
@@ -165,7 +549,7 @@ async function appendScreenshot(formData: FormData, asset: ImagePicker.ImagePick
   } as unknown as Blob);
 }
 
-async function uploadDiagnosis(input: { machineId: number; asset: ImagePicker.ImagePickerAsset }): Promise<DiagnosisCreate> {
+async function uploadDiagnosis(input: { machineId: number; asset: ImagePicker.ImagePickerAsset; token: string }): Promise<DiagnosisCreate> {
   const formData = new FormData();
 
   formData.append('machine_id', String(input.machineId));
@@ -175,6 +559,7 @@ async function uploadDiagnosis(input: { machineId: number; asset: ImagePicker.Im
     method: 'POST',
     headers: {
       Accept: 'application/json',
+      Authorization: `Bearer ${input.token}`,
     },
     body: formData,
   });
@@ -182,11 +567,12 @@ async function uploadDiagnosis(input: { machineId: number; asset: ImagePicker.Im
   return parseJsonResponse(response, diagnosisCreateSchema, 'Could not upload screenshot.');
 }
 
-async function submitManualCode(input: { diagnosisId: string; codes: string[]; moduleKey: string }): Promise<DiagnosisDetail> {
+async function submitManualCode(input: { diagnosisId: string; codes: string[]; moduleKey: string; token: string }): Promise<DiagnosisDetail> {
   const response = await fetch(`${apiBaseUrl}/diagnoses/${input.diagnosisId}/manual-code`, {
     method: 'POST',
     headers: {
       Accept: 'application/json',
+      Authorization: `Bearer ${input.token}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
@@ -292,6 +678,388 @@ function grayscaleAt(pixels: Uint8ClampedArray, width: number, x: number, y: num
   return pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 + pixels[offset + 2] * 0.114;
 }
 
+function AmbientBackground() {
+  const { height, width } = useWindowDimensions();
+  const cloud = useRef(new Animated.Value(0)).current;
+  const mesh = useMemo(() => buildDotMeshSpec(width, height), [height, width]);
+
+  useEffect(() => {
+    if (Platform.OS === 'web') {
+      return undefined;
+    }
+
+    const cloudLoop = Animated.loop(
+      Animated.timing(cloud, {
+        toValue: 1,
+        duration: cloudAnimationDurationMs,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
+    );
+
+    cloudLoop.start();
+
+    return () => {
+      cloudLoop.stop();
+    };
+  }, [cloud]);
+
+  return (
+    <View pointerEvents="none" style={styles.ambientRoot}>
+      <View style={styles.backgroundBase} />
+      {Platform.OS === 'web' ? (
+        <WebHalftoneCanvas viewportHeight={height} viewportWidth={width} />
+      ) : (
+        <View style={[styles.halftoneLayer, { height: mesh.height, left: -mesh.cellSize * 10, top: -mesh.cellSize * 10, width: mesh.width }]}>
+          <DotMesh cellSize={mesh.cellSize} phase={cloud} rows={mesh.rows} />
+        </View>
+      )}
+      <View style={styles.halftoneVignette} />
+    </View>
+  );
+}
+
+function ScreenshotViewer({ source }: { source: ScreenshotPreviewSource }) {
+  const { height: viewportHeight, width: viewportWidth } = useWindowDimensions();
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [imageSize, setImageSize] = useState(() => {
+    if (source.width && source.height) {
+      return {
+        height: source.height,
+        width: source.width,
+      };
+    }
+
+    return null;
+  });
+
+  useEffect(() => {
+    let cancelled = false;
+
+    setZoom(1);
+
+    if (source.width && source.height) {
+      setImageSize({
+        height: source.height,
+        width: source.width,
+      });
+
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setImageSize(null);
+    RNImage.getSize(
+      source.uri,
+      (width, height) => {
+        if (!cancelled) {
+          setImageSize({ height, width });
+        }
+      },
+      () => {
+        if (!cancelled) {
+          setImageSize({ height: 3, width: 4 });
+        }
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [source.height, source.uri, source.width]);
+
+  const aspectRatio = imageSize ? imageSize.width / imageSize.height : 4 / 3;
+  const previewWidth = Math.min(Math.max(viewportWidth - 84, 220), 720);
+  const previewHeight = clamp(previewWidth / aspectRatio, 180, 320);
+  const modalViewportWidth = Math.max(220, viewportWidth - (viewportWidth < 640 ? 34 : 52));
+  const modalViewportHeight = Math.max(240, viewportHeight - 198);
+  const fittedScale = imageSize
+    ? Math.min(modalViewportWidth / imageSize.width, modalViewportHeight / imageSize.height)
+    : 1;
+  const baseImageWidth = imageSize ? Math.max(180, imageSize.width * fittedScale) : modalViewportWidth;
+  const baseImageHeight = imageSize ? Math.max(140, imageSize.height * fittedScale) : modalViewportHeight * 0.75;
+  const zoomedWidth = baseImageWidth * zoom;
+  const zoomedHeight = baseImageHeight * zoom;
+
+  function adjustZoom(nextZoom: number): void {
+    setZoom(clamp(nextZoom, 1, 4));
+  }
+
+  function openViewer(): void {
+    setZoom(1);
+    setViewerOpen(true);
+  }
+
+  function closeViewer(): void {
+    setViewerOpen(false);
+    setZoom(1);
+  }
+
+  return (
+    <>
+      <View style={styles.screenshotCard}>
+        <View style={styles.screenshotCardHeader}>
+          <View style={styles.screenshotCardTitleWrap}>
+            <Text style={styles.detectedLabel}>Uploaded image</Text>
+            <Text style={styles.screenshotCardText}>Check the OCR result against the original screenshot.</Text>
+          </View>
+
+          <Pressable onPress={openViewer} style={({ pressed }) => [styles.viewerActionButton, pressed && styles.buttonPressed]}>
+            <Text style={styles.viewerActionButtonText}>Full screen</Text>
+          </Pressable>
+        </View>
+
+        <Pressable onPress={openViewer} style={({ pressed }) => [styles.screenshotPreviewFrame, pressed && styles.buttonPressed]}>
+          <RNImage source={{ uri: source.uri }} resizeMode="contain" style={[styles.screenshotPreviewImage, { height: previewHeight }]} />
+        </Pressable>
+      </View>
+
+      <Modal animationType="fade" onRequestClose={closeViewer} transparent visible={viewerOpen}>
+        <View style={styles.imageViewerBackdrop}>
+          <View style={styles.imageViewerPanel}>
+            <View style={styles.imageViewerHeader}>
+              <View style={styles.imageViewerTitleWrap}>
+                <Text style={styles.sectionTitle}>Uploaded image</Text>
+                <Text style={styles.helperText}>Zoom in to verify the detected module and codes.</Text>
+              </View>
+
+              <Pressable onPress={closeViewer} style={({ pressed }) => [styles.pageBackButton, pressed && styles.buttonPressed]}>
+                <Text style={styles.pageBackText}>Close</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.imageViewerToolbar}>
+              <Pressable
+                disabled={zoom <= 1}
+                onPress={() => adjustZoom(zoom - 0.25)}
+                style={({ pressed }) => [styles.viewerToolButton, zoom <= 1 && styles.buttonDisabled, pressed && styles.buttonPressed]}
+              >
+                <Text style={styles.viewerToolButtonText}>-</Text>
+              </Pressable>
+
+              <Text style={styles.imageViewerZoomText}>{Math.round(zoom * 100)}%</Text>
+
+              <Pressable
+                disabled={zoom >= 4}
+                onPress={() => adjustZoom(zoom + 0.25)}
+                style={({ pressed }) => [styles.viewerToolButton, zoom >= 4 && styles.buttonDisabled, pressed && styles.buttonPressed]}
+              >
+                <Text style={styles.viewerToolButtonText}>+</Text>
+              </Pressable>
+
+              <Pressable onPress={() => adjustZoom(1)} style={({ pressed }) => [styles.viewerActionButton, pressed && styles.buttonPressed]}>
+                <Text style={styles.viewerActionButtonText}>Reset</Text>
+              </Pressable>
+            </View>
+
+            <View style={[styles.imageViewerViewport, { maxHeight: modalViewportHeight }]}>
+              <ScrollView
+                contentContainerStyle={[styles.imageViewerHorizontalContent, { minHeight: modalViewportHeight, minWidth: modalViewportWidth }]}
+                horizontal
+                maximumZoomScale={4}
+                minimumZoomScale={1}
+              >
+                <ScrollView contentContainerStyle={[styles.imageViewerVerticalContent, { minHeight: modalViewportHeight }]}>
+                  <View style={[styles.imageViewerImageFrame, { height: zoomedHeight, width: zoomedWidth }]}>
+                    <RNImage source={{ uri: source.uri }} resizeMode="contain" style={styles.imageViewerImage} />
+                  </View>
+                </ScrollView>
+              </ScrollView>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </>
+  );
+}
+
+function WebHalftoneCanvas({ viewportHeight, viewportWidth }: { viewportHeight: number; viewportWidth: number }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const spec = useMemo(() => buildCanvasDotSpec(viewportWidth, viewportHeight), [viewportHeight, viewportWidth]);
+  const overscan = spec.cellSize * 10;
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+
+    if (!canvas) {
+      return undefined;
+    }
+
+    const context = canvas.getContext('2d');
+
+    if (!context) {
+      return undefined;
+    }
+
+    const drawContext = context;
+    const pixelRatio = Math.max(1, Math.min(globalThis.devicePixelRatio || 1, 2));
+    let animationFrame = 0;
+    canvas.width = Math.round(spec.width * pixelRatio);
+    canvas.height = Math.round(spec.height * pixelRatio);
+    drawContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    let startTimestamp: number | null = null;
+
+    function draw(timestamp: number): void {
+      if (startTimestamp === null) {
+        startTimestamp = timestamp;
+      }
+
+      const phase = (timestamp - startTimestamp) * cloudPhaseSpeed;
+
+      drawHalftoneGradient(drawContext, spec.width, spec.height);
+
+      for (let index = 0; index < spec.dots.length; index += 1) {
+        const dot = spec.dots[index];
+        const opacity = dotOpacityAt(dot.xNorm, dot.yNorm, dot.row, dot.column, phase);
+
+        if (opacity < 0.075) {
+          continue;
+        }
+
+        const bright = opacity > 0.78;
+        const colorBlend = dot.tone === 'ghost' ? 0 : smoothstep(0.08, 0.78, dot.accentStrength) * smoothstep(0.18, 0.52, opacity);
+        const size = bright || colorBlend > 0.52 ? 3.2 : opacity > 0.56 ? 2.8 : 2.35;
+        const halfSize = size / 2;
+
+        drawContext.fillStyle = colorForDotTone(dot.tone, opacity, colorBlend);
+
+        drawContext.fillRect(dot.x - halfSize, dot.y - halfSize, size, size);
+      }
+
+      animationFrame = globalThis.requestAnimationFrame(draw);
+    }
+
+    animationFrame = globalThis.requestAnimationFrame(draw);
+
+    return () => {
+      globalThis.cancelAnimationFrame(animationFrame);
+    };
+  }, [spec]);
+
+  return createElement('canvas', {
+    ref: canvasRef,
+    style: {
+      height: spec.height,
+      left: -overscan,
+      pointerEvents: 'none',
+      position: 'absolute',
+      top: -overscan,
+      width: spec.width,
+    },
+  });
+}
+
+function colorForDotTone(tone: DotTone, opacity: number, blend: number): string {
+  const defaultColor = opacity > 0.78 ? [255, 252, 245] : opacity > 0.56 ? [244, 246, 248] : [214, 224, 238];
+  let accentColor = defaultColor;
+
+  switch (tone) {
+    case 'aqua':
+      accentColor = [89, 242, 211];
+      break;
+    case 'blue':
+      accentColor = [118, 154, 255];
+      break;
+    case 'cyan':
+      accentColor = [79, 229, 255];
+      break;
+    case 'violet':
+      accentColor = [174, 146, 255];
+      break;
+    default:
+      accentColor = defaultColor;
+  }
+
+  const amount = clamp(blend * 0.78, 0, 0.78);
+  const red = Math.round(lerp(defaultColor[0], accentColor[0], amount));
+  const green = Math.round(lerp(defaultColor[1], accentColor[1], amount));
+  const blue = Math.round(lerp(defaultColor[2], accentColor[2], amount));
+  const alpha = Math.min(0.96, opacity * (1 + amount * 0.05));
+
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function drawHalftoneGradient(context: CanvasRenderingContext2D, width: number, height: number): void {
+  const base = context.createLinearGradient(0, 0, 0, height);
+
+  base.addColorStop(0, '#0f121b');
+  base.addColorStop(0.34, '#070914');
+  base.addColorStop(0.58, '#020307');
+  base.addColorStop(1, '#080b12');
+  context.fillStyle = base;
+  context.fillRect(0, 0, width, height);
+
+  const depthWash = context.createLinearGradient(0, 0, width, 0);
+
+  depthWash.addColorStop(0, 'rgba(97, 123, 255, 0.05)');
+  depthWash.addColorStop(0.45, 'rgba(0, 0, 0, 0)');
+  depthWash.addColorStop(1, 'rgba(38, 209, 238, 0.045)');
+  context.fillStyle = depthWash;
+  context.fillRect(0, 0, width, height);
+
+  const verticalWash = context.createLinearGradient(0, 0, 0, height);
+
+  verticalWash.addColorStop(0, 'rgba(255, 255, 255, 0.028)');
+  verticalWash.addColorStop(0.36, 'rgba(0, 0, 0, 0)');
+  verticalWash.addColorStop(0.68, 'rgba(0, 0, 0, 0.06)');
+  verticalWash.addColorStop(1, 'rgba(143, 183, 255, 0.035)');
+  context.fillStyle = verticalWash;
+  context.fillRect(0, 0, width, height);
+
+  const centerTone = context.createLinearGradient(width * 0.18, 0, width * 0.82, 0);
+
+  centerTone.addColorStop(0, 'rgba(0, 0, 0, 0.08)');
+  centerTone.addColorStop(0.5, 'rgba(10, 16, 26, 0.045)');
+  centerTone.addColorStop(1, 'rgba(0, 0, 0, 0.08)');
+  context.fillStyle = centerTone;
+  context.fillRect(0, 0, width, height);
+}
+
+function DotMesh({ cellSize, phase, rows }: { cellSize: number; phase: Animated.Value; rows: DotCell[][] }) {
+  return (
+    <>
+      {rows.map((row, rowIndex) => (
+        <View key={rowIndex} style={[styles.dotRow, { height: cellSize }]}>
+          {row.map((dot) => (
+            <Animated.View
+              key={dot.key}
+              style={[
+                styles.dotCell,
+                { height: cellSize, opacity: phase.interpolate({ inputRange: cloudInputRange, outputRange: dot.opacityFrames }), width: cellSize },
+              ]}
+            >
+              <View
+                style={[
+                  styles.dot,
+                dot.tone === 'dim' && styles.dotDim,
+                dot.tone === 'mid' && styles.dotMid,
+                dot.tone === 'bright' && styles.dotBright,
+                dot.tone === 'aqua' && styles.dotAqua,
+                dot.tone === 'blue' && styles.dotBlue,
+                dot.tone === 'cyan' && styles.dotCyan,
+                dot.tone === 'violet' && styles.dotViolet,
+              ]}
+            />
+            </Animated.View>
+          ))}
+        </View>
+      ))}
+    </>
+  );
+}
+
+function WindowControls() {
+  return (
+    <View style={styles.windowControls}>
+      <View style={[styles.windowDot, styles.windowDotClose]} />
+      <View style={[styles.windowDot, styles.windowDotMinimize]} />
+      <View style={[styles.windowDot, styles.windowDotMaximize]} />
+    </View>
+  );
+}
+
 function splitCodeInput(value: string): string[] {
   return Array.from(
     new Set(
@@ -350,18 +1118,48 @@ function moduleFromDiagnosis(detail: DiagnosisDetail | null): string {
   return typeof fromMetadata === 'string' ? fromMetadata : 'PLUGSA';
 }
 
-function Stepper({ currentStep }: { currentStep: WizardStep }) {
-  const currentIndex = steps.findIndex((step) => step.id === currentStep);
+function Stepper({ currentStep }: { currentStep: DiagnosisStep }) {
+  const currentIndex = diagnosisSteps.findIndex((step) => step.id === currentStep);
+  const pulse = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 1200,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 0,
+          duration: 900,
+          easing: Easing.in(Easing.cubic),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+
+    loop.start();
+
+    return () => loop.stop();
+  }, [pulse]);
+
+  const pulseStyle = {
+    opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.18, 0.52] }),
+    transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.42] }) }],
+  };
 
   return (
     <View style={styles.stepper}>
-      {steps.map((step, index) => {
+      {diagnosisSteps.map((step, index) => {
         const active = step.id === currentStep;
         const done = index < currentIndex;
 
         return (
           <View key={step.id} style={styles.stepItem}>
             <View style={[styles.stepDot, active && styles.stepDotActive, done && styles.stepDotDone]}>
+              {active ? <Animated.View style={[styles.stepPulse, pulseStyle]} /> : null}
               <Text style={[styles.stepNumber, active && styles.stepNumberActive, done && !active && styles.stepNumberDone]}>
                 {index + 1}
               </Text>
@@ -451,7 +1249,7 @@ function ErrorPreviewCard({ candidate, entry }: { candidate: DiagnosisCandidate 
         <Text style={styles.matchScore}>{formatPercent(candidate?.confidence ?? entry?.confidence)}</Text>
       </View>
 
-      <Text style={styles.matchTitle}>{entry?.title || entry?.meaning || 'No approved manual meaning yet'}</Text>
+      <Text style={styles.matchTitle}>{entry?.title || entry?.meaning || 'No manual meaning yet'}</Text>
 
       {entry?.meaning ? (
         <View style={styles.textBlock}>
@@ -470,8 +1268,181 @@ function ErrorPreviewCard({ candidate, entry }: { candidate: DiagnosisCandidate 
   );
 }
 
-function MachineErrorHelper() {
-  const [step, setStep] = useState<WizardStep>('machine');
+function LoginScreen({
+  isPending,
+  onLogin,
+  onRegister,
+  error,
+}: {
+  isPending: boolean;
+  onLogin: (input: { email: string; password: string }) => void;
+  onRegister: (input: { name: string; email: string; password: string; passwordConfirmation: string }) => void;
+  error: string | null;
+}) {
+  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [passwordConfirmation, setPasswordConfirmation] = useState('');
+  const isRegistering = mode === 'register';
+  const canSubmit =
+    email.trim() !== '' &&
+    password !== '' &&
+    !isPending &&
+    (!isRegistering || (name.trim() !== '' && passwordConfirmation !== ''));
+
+  function submit(): void {
+    if (isRegistering) {
+      onRegister({
+        name: name.trim(),
+        email: email.trim(),
+        password,
+        passwordConfirmation,
+      });
+
+      return;
+    }
+
+    onLogin({ email: email.trim(), password });
+  }
+
+  function submitFromInput(): void {
+    if (canSubmit) {
+      submit();
+    }
+  }
+
+  function handleInputKeyPress(event: NativeSyntheticEvent<TextInputKeyPressEventData>): void {
+    if (Platform.OS === 'web' && event.nativeEvent.key === 'Enter') {
+      submitFromInput();
+    }
+  }
+
+  return (
+    <SafeAreaView style={styles.screen}>
+      <AmbientBackground />
+      <StatusBar style="light" />
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.keyboard}>
+        <ScrollView contentContainerStyle={styles.loginScrollContent} keyboardShouldPersistTaps="handled">
+          <View style={styles.loginShell}>
+            <View style={styles.loginWindow}>
+              <View style={styles.windowToolbar}>
+                <WindowControls />
+                <Text style={styles.windowTitle}>Machine Error Helper</Text>
+                <View style={styles.windowToolbarSpacer} />
+              </View>
+
+              <View style={styles.loginHero}>
+                <Text style={styles.eyebrow}>Machine Error Helper</Text>
+                <Text style={styles.title}>{isRegistering ? 'Create your account.' : 'Sign in to continue.'}</Text>
+                <Text style={styles.subtitle}>Diagnose machine dashboard alarms from screenshot to repair hint.</Text>
+              </View>
+
+              <View style={styles.loginPanel}>
+                <Text style={styles.sectionTitle}>{isRegistering ? 'Register' : 'Login'}</Text>
+
+                <View style={styles.inputGrid}>
+                  {isRegistering ? (
+                    <View style={styles.inputGroup}>
+                      <Text style={styles.inputLabel}>Name</Text>
+                      <TextInput
+                        autoCapitalize="words"
+                        autoComplete="name"
+                        onKeyPress={handleInputKeyPress}
+                        onChangeText={setName}
+                        onSubmitEditing={Platform.OS === 'web' ? undefined : submitFromInput}
+                        placeholder="Operator name"
+                        placeholderTextColor="#7f8490"
+                        returnKeyType="done"
+                        style={styles.input}
+                        value={name}
+                      />
+                    </View>
+                  ) : null}
+
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Email</Text>
+                    <TextInput
+                      autoCapitalize="none"
+                      autoComplete="email"
+                      keyboardType="email-address"
+                      onKeyPress={handleInputKeyPress}
+                      onChangeText={setEmail}
+                      onSubmitEditing={Platform.OS === 'web' ? undefined : submitFromInput}
+                      placeholder="operator@example.com"
+                      placeholderTextColor="#7f8490"
+                      returnKeyType="done"
+                      style={styles.input}
+                      value={email}
+                    />
+                  </View>
+
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Password</Text>
+                    <TextInput
+                      autoCapitalize="none"
+                      autoComplete="password"
+                      onKeyPress={handleInputKeyPress}
+                      onChangeText={setPassword}
+                      onSubmitEditing={Platform.OS === 'web' ? undefined : submitFromInput}
+                      placeholder="Password"
+                      placeholderTextColor="#7f8490"
+                      returnKeyType="done"
+                      secureTextEntry
+                      style={styles.input}
+                      value={password}
+                    />
+                  </View>
+
+                  {isRegistering ? (
+                    <View style={styles.inputGroup}>
+                      <Text style={styles.inputLabel}>Confirm password</Text>
+                      <TextInput
+                        autoCapitalize="none"
+                        autoComplete="password"
+                        onKeyPress={handleInputKeyPress}
+                        onChangeText={setPasswordConfirmation}
+                        onSubmitEditing={Platform.OS === 'web' ? undefined : submitFromInput}
+                        placeholder="Confirm password"
+                        placeholderTextColor="#7f8490"
+                        returnKeyType="done"
+                        secureTextEntry
+                        style={styles.input}
+                        value={passwordConfirmation}
+                      />
+                    </View>
+                  ) : null}
+                </View>
+
+                {error ? <Text style={styles.error}>{error}</Text> : null}
+
+                <Pressable
+                  disabled={!canSubmit}
+                  onPress={submit}
+                  style={({ pressed }) => [styles.fullButton, !canSubmit && styles.buttonDisabled, pressed && styles.buttonPressed]}
+                >
+                  <Text style={styles.buttonText}>{isPending ? 'Please wait' : isRegistering ? 'Create Account' : 'Sign In'}</Text>
+                </Pressable>
+
+                <Pressable
+                  disabled={isPending}
+                  onPress={() => setMode(isRegistering ? 'login' : 'register')}
+                  style={({ pressed }) => [styles.authSwitchButton, pressed && styles.buttonPressed]}
+                >
+                  <Text style={styles.authSwitchText}>{isRegistering ? 'Already have an account? Sign in' : 'Need an account? Register'}</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
+  );
+}
+
+function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: string; authUser: AuthUser; onLogout: () => void }) {
+  const [page, setPage] = useState<AppPage>('dashboard');
+  const [diagnosisStep, setDiagnosisStep] = useState<DiagnosisStep>('upload');
   const [selectedMachine, setSelectedMachine] = useState<Machine | null>(null);
   const [selectedImage, setSelectedImage] = useState<ImagePicker.ImagePickerAsset | null>(null);
   const [imageQuality, setImageQuality] = useState<ImageQuality | null>(null);
@@ -481,7 +1452,11 @@ function MachineErrorHelper() {
   const [manualCode, setManualCode] = useState('');
   const [moduleKey, setModuleKey] = useState('PLUGSA');
   const [manualResult, setManualResult] = useState<DiagnosisDetail | null>(null);
+  const [addMachineModalOpen, setAddMachineModalOpen] = useState(false);
+  const [machineSearch, setMachineSearch] = useState('');
   const fade = useRef(new Animated.Value(1)).current;
+  const trimmedMachineSearch = machineSearch.trim();
+  const userMachinesQueryKey = useMemo(() => ['user-machines', authToken] as const, [authToken]);
 
   useEffect(() => {
     fade.setValue(0);
@@ -491,17 +1466,23 @@ function MachineErrorHelper() {
       easing: Easing.out(Easing.cubic),
       useNativeDriver: true,
     }).start();
-  }, [fade, step]);
+  }, [diagnosisStep, fade, page]);
 
   const machines = useQuery({
-    queryKey: ['machines'],
-    queryFn: fetchMachines,
+    enabled: addMachineModalOpen && trimmedMachineSearch.length >= 2,
+    queryKey: ['machines', authToken, trimmedMachineSearch],
+    queryFn: () => fetchMachines(authToken, trimmedMachineSearch),
+  });
+
+  const userMachinesQuery = useQuery({
+    queryKey: userMachinesQueryKey,
+    queryFn: () => fetchUserMachines(authToken),
   });
 
   const diagnosis = useQuery({
     enabled: !!diagnosisId,
-    queryKey: ['diagnosis', diagnosisId],
-    queryFn: () => fetchDiagnosis(diagnosisId as string),
+    queryKey: ['diagnosis', diagnosisId, authToken],
+    queryFn: () => fetchDiagnosis(diagnosisId as string, authToken),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
 
@@ -510,7 +1491,7 @@ function MachineErrorHelper() {
   });
 
   const upload = useMutation({
-    mutationFn: uploadDiagnosis,
+    mutationFn: (input: { machineId: number; asset: ImagePicker.ImagePickerAsset }) => uploadDiagnosis({ ...input, token: authToken }),
     onSuccess: (payload) => {
       setDiagnosisId(payload.id);
       setAutoAdvancedDiagnosisId(null);
@@ -519,11 +1500,63 @@ function MachineErrorHelper() {
   });
 
   const manualLookup = useMutation({
-    mutationFn: submitManualCode,
+    mutationFn: (input: { diagnosisId: string; codes: string[]; moduleKey: string }) => submitManualCode({ ...input, token: authToken }),
     onSuccess: (payload) => {
       setManualResult(payload);
-      queryClient.setQueryData(['diagnosis', payload.id], payload);
-      setStep('result');
+      queryClient.setQueryData(['diagnosis', payload.id, authToken], payload);
+      setPage('diagnosis');
+      setDiagnosisStep('result');
+    },
+  });
+
+  const addUserMachine = useMutation({
+    mutationFn: (machine: Machine) => attachUserMachine({ machineId: machine.id, token: authToken }),
+    onSuccess: async (machine) => {
+      queryClient.setQueryData<Machine[]>(userMachinesQueryKey, (current = []) =>
+        sortMachinesByName([...current.filter((candidate) => candidate.id !== machine.id), machine]),
+      );
+
+      setSelectedMachine((current) => {
+        if (current) {
+          return current;
+        }
+
+        storeSelectedMachineId(authUser.id, machine.id);
+
+        return machine;
+      });
+      await queryClient.refetchQueries({ queryKey: userMachinesQueryKey, type: 'active' });
+      setAddMachineModalOpen(false);
+      setMachineSearch('');
+    },
+  });
+
+  const removeUserMachine = useMutation({
+    mutationFn: (machine: Machine) => detachUserMachine({ machineId: machine.id, token: authToken }),
+    onSuccess: (_payload, machine) => {
+      let nextUserMachines: Machine[] = [];
+
+      queryClient.setQueryData<Machine[]>(userMachinesQueryKey, (current = []) => {
+        nextUserMachines = current.filter((candidate) => candidate.id !== machine.id);
+
+        return nextUserMachines;
+      });
+
+      setSelectedMachine((current) => {
+        if (current?.id !== machine.id) {
+          return current;
+        }
+
+        const nextSelectedMachine = nextUserMachines[0] ?? null;
+
+        if (nextSelectedMachine) {
+          storeSelectedMachineId(authUser.id, nextSelectedMachine.id);
+        } else {
+          forgetSelectedMachineId(authUser.id);
+        }
+
+        return nextSelectedMachine;
+      });
     },
   });
 
@@ -532,9 +1565,48 @@ function MachineErrorHelper() {
   const canAnalyze = !!selectedMachine && !!selectedImage && imageQuality?.status !== 'fail' && !upload.isPending && !imageValidationPending;
   const canConfirm = !!diagnosisId && manualCodes.length > 0 && !manualLookup.isPending;
   const translateY = fade.interpolate({ inputRange: [0, 1], outputRange: [14, 0] });
+  const machineDetails = selectedMachine ? [selectedMachine.manufacturer, selectedMachine.model_number].filter(Boolean).join(' ') || 'No model details' : null;
+  const confirmScreenshotSource = useMemo<ScreenshotPreviewSource | null>(() => {
+    if (selectedImage) {
+      return {
+        height: selectedImage.height ?? null,
+        uri: selectedImage.uri,
+        width: selectedImage.width ?? null,
+      };
+    }
+
+    if (activeDiagnosis?.screenshot_url) {
+      return {
+        uri: resolveAssetUrl(activeDiagnosis.screenshot_url),
+      };
+    }
+
+    return null;
+  }, [activeDiagnosis?.screenshot_url, selectedImage]);
+  const userMachines = userMachinesQuery.data ?? [];
+  const userMachineIds = useMemo(() => userMachines.map((machine) => machine.id), [userMachines]);
+  const addableMachines = useMemo(
+    () => (machines.data ?? []).filter((machine) => !userMachineIds.includes(machine.id)),
+    [machines.data, userMachineIds],
+  );
+  const machineMutationError =
+    removeUserMachine.error instanceof Error
+      ? removeUserMachine.error.message
+      : null;
+  const addMachineError = addUserMachine.error instanceof Error ? addUserMachine.error.message : null;
 
   useEffect(() => {
-    if (step !== 'upload' || !diagnosis.data || autoAdvancedDiagnosisId === diagnosis.data.id) {
+    if (
+      (machines.error instanceof ApiError && [401, 403].includes(machines.error.status)) ||
+      (userMachinesQuery.error instanceof ApiError && [401, 403].includes(userMachinesQuery.error.status)) ||
+      (diagnosis.error instanceof ApiError && [401, 403].includes(diagnosis.error.status))
+    ) {
+      onLogout();
+    }
+  }, [diagnosis.error, machines.error, onLogout, userMachinesQuery.error]);
+
+  useEffect(() => {
+    if (page !== 'diagnosis' || diagnosisStep !== 'upload' || !diagnosis.data || autoAdvancedDiagnosisId === diagnosis.data.id) {
       return;
     }
 
@@ -547,8 +1619,38 @@ function MachineErrorHelper() {
     setModuleKey(moduleFromDiagnosis(detail));
     setManualCode(codesFromCandidates(detail.candidates ?? []));
     setAutoAdvancedDiagnosisId(detail.id);
-    setStep('confirm');
-  }, [autoAdvancedDiagnosisId, diagnosis.data, step]);
+    setDiagnosisStep('confirm');
+  }, [autoAdvancedDiagnosisId, diagnosis.data, diagnosisStep, page]);
+
+  useEffect(() => {
+    if (selectedMachine || !userMachines.length) {
+      return;
+    }
+
+    const storedMachineId = readStoredMachineId(authUser.id);
+    const storedMachine = userMachines.find((machine) => machine.id === storedMachineId) ?? userMachines[0];
+
+    if (storedMachine) {
+      setSelectedMachine(storedMachine);
+      storeSelectedMachineId(authUser.id, storedMachine.id);
+    }
+  }, [authUser.id, selectedMachine, userMachines]);
+
+  useEffect(() => {
+    if (!selectedMachine || !userMachinesQuery.isSuccess || userMachines.some((machine) => machine.id === selectedMachine.id)) {
+      return;
+    }
+
+    const nextSelectedMachine = userMachines[0] ?? null;
+
+    setSelectedMachine(nextSelectedMachine);
+
+    if (nextSelectedMachine) {
+      storeSelectedMachineId(authUser.id, nextSelectedMachine.id);
+    } else {
+      forgetSelectedMachineId(authUser.id);
+    }
+  }, [authUser.id, selectedMachine, userMachines, userMachinesQuery.isSuccess]);
 
   async function chooseImage(source: ImageSource): Promise<void> {
     const asset = await pickImage(source);
@@ -572,8 +1674,12 @@ function MachineErrorHelper() {
   }
 
   function startOver(): void {
-    setStep('machine');
-    setSelectedMachine(null);
+    setPage('dashboard');
+    setDiagnosisStep('upload');
+    resetDiagnosisState();
+  }
+
+  function resetDiagnosisState(): void {
     setSelectedImage(null);
     setImageQuality(null);
     setDiagnosisId(null);
@@ -583,78 +1689,199 @@ function MachineErrorHelper() {
     setModuleKey('PLUGSA');
   }
 
+  function selectMachine(machine: Machine): void {
+    setSelectedMachine(machine);
+    storeSelectedMachineId(authUser.id, machine.id);
+  }
+
+  function addMachineToUserList(machine: Machine): void {
+    addUserMachine.mutate(machine);
+  }
+
+  function removeMachineFromUserList(machine: Machine): void {
+    removeUserMachine.mutate(machine);
+  }
+
+  function beginScan(): void {
+    resetDiagnosisState();
+    setDiagnosisStep('upload');
+    setPage(selectedMachine ? 'diagnosis' : 'machines');
+  }
+
+  function closeAddMachineModal(): void {
+    setAddMachineModalOpen(false);
+    setMachineSearch('');
+    addUserMachine.reset();
+  }
+
   return (
     <SafeAreaView style={styles.screen}>
+      <AmbientBackground />
       <StatusBar style="light" />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.keyboard}>
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
           <View style={styles.shell}>
-            <ImageBackground source={workshopImage} resizeMode="cover" style={styles.hero} imageStyle={styles.heroImage}>
-              <View style={styles.heroShade}>
-                <Text style={styles.eyebrow}>Machine Error Helper</Text>
-                <Text style={styles.title}>Find the alarm code before the line stops longer.</Text>
-                <Text style={styles.subtitle}>Guided diagnosis for machine dashboards, from screenshot to repair hint.</Text>
+            <View style={styles.appWindow}>
+              <View style={styles.windowToolbar}>
+                <WindowControls />
+                <Text style={styles.windowTitle}>Machine Error Helper</Text>
+                <Pressable onPress={onLogout} style={({ pressed }) => [styles.logoutButton, pressed && styles.buttonPressed]}>
+                  <Text style={styles.logoutText}>Logout</Text>
+                </Pressable>
               </View>
-            </ImageBackground>
 
-            <Stepper currentStep={step} />
+              {page === 'diagnosis' ? <Stepper currentStep={diagnosisStep} /> : null}
 
-            <Animated.View style={[styles.stepCard, { opacity: fade, transform: [{ translateY }] }]}>
-              {step === 'machine' ? (
+              <Animated.View style={[styles.stepCard, { opacity: fade, transform: [{ translateY }] }]}>
+              {page === 'dashboard' ? (
                 <View>
-                  <Text style={styles.sectionTitle}>Select machine</Text>
-                  <Text style={styles.helperText}>Choose the machine that is showing the dashboard alarm.</Text>
+                  <Text style={styles.sectionTitle}>Dashboard</Text>
+                  <Text style={styles.helperText}>Start with your machine, then scan the code shown on its display.</Text>
 
-                  {machines.isLoading ? (
-                    <View style={styles.stateBox}>
-                      <ActivityIndicator color="#ffd21e" />
-                      <Text style={styles.stateText}>Loading configured machines</Text>
+                  <View style={styles.dashboardGrid}>
+                    <View style={styles.dashboardCard}>
+                      <View style={styles.dashboardCardHeader}>
+                        <View>
+                          <Text style={styles.dashboardKicker}>Machine</Text>
+                          <Text style={styles.dashboardTitle}>My machines</Text>
+                        </View>
+                        <Text style={[styles.dashboardStatus, selectedMachine && styles.dashboardStatusActive]}>
+                          {userMachinesQuery.isLoading ? 'Loading' : `${userMachines.length} saved`}
+                        </Text>
+                      </View>
+                      <Text style={styles.dashboardText}>
+                        {selectedMachine
+                          ? `Active: ${selectedMachine.name}${machineDetails ? `, ${machineDetails}` : ''}`
+                          : 'Add the machine you are working on. Your saved machines stay connected to your account.'}
+                      </Text>
+                      {userMachines.length > 0 ? (
+                        <View style={styles.savedMachineList}>
+                          {userMachines.map((machine) => (
+                            <Pressable
+                              key={machine.id}
+                              onPress={() => selectMachine(machine)}
+                              style={({ pressed }) => [
+                                styles.savedMachinePill,
+                                selectedMachine?.id === machine.id && styles.savedMachinePillActive,
+                                pressed && styles.buttonPressed,
+                              ]}
+                            >
+                              <Text style={[styles.savedMachineText, selectedMachine?.id === machine.id && styles.savedMachineTextActive]}>
+                                {machine.name}
+                              </Text>
+                            </Pressable>
+                          ))}
+                        </View>
+                      ) : null}
+                      <Pressable onPress={() => setPage('machines')} style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}>
+                        <Text style={styles.secondaryButtonText}>Manage Machines</Text>
+                      </Pressable>
                     </View>
-                  ) : machines.error ? (
+
+                    <View style={styles.dashboardCard}>
+                      <View style={styles.dashboardCardHeader}>
+                        <View>
+                          <Text style={styles.dashboardKicker}>Diagnosis</Text>
+                          <Text style={styles.dashboardTitle}>Scan the code</Text>
+                        </View>
+                        <Text style={styles.dashboardStatus}>Next</Text>
+                      </View>
+                      <Text style={styles.dashboardText}>
+                        Take a photo or upload a screenshot of the dashboard alarm and confirm the detected code.
+                      </Text>
+                      <Pressable onPress={beginScan} style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}>
+                        <Text style={styles.buttonText}>{selectedMachine ? 'Scan Code' : 'Choose Machine First'}</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                </View>
+              ) : null}
+
+              {page === 'machines' ? (
+                <View>
+                  <View style={styles.pageTitleRow}>
+                    <Text style={[styles.sectionTitle, styles.pageTitle]}>My machines</Text>
+                    <Pressable onPress={() => setPage('dashboard')} style={({ pressed }) => [styles.pageBackButton, pressed && styles.buttonPressed]}>
+                      <Text style={styles.pageBackText}>Back to Dashboard</Text>
+                    </Pressable>
+                  </View>
+                  <Text style={styles.helperText}>Manage the machines you use. Choose one as active or add another machine from the catalog.</Text>
+                  <Pressable onPress={() => setAddMachineModalOpen(true)} style={({ pressed }) => [styles.addMachineButton, pressed && styles.buttonPressed]}>
+                    <Text style={styles.buttonText}>Add Machine</Text>
+                  </Pressable>
+
+                  {userMachinesQuery.isLoading ? (
+                    <View style={styles.stateBox}>
+                      <ActivityIndicator color="#8fb7ff" />
+                      <Text style={styles.stateText}>Loading saved machines</Text>
+                    </View>
+                  ) : userMachinesQuery.error ? (
                     <View style={styles.stateBox}>
                       <Text style={styles.error}>Backend is not reachable at {apiBaseUrl}</Text>
                     </View>
                   ) : (
-                    <View style={styles.machineList}>
-                      {(machines.data ?? []).map((machine) => {
-                        const selected = selectedMachine?.id === machine.id;
+                    <View>
+                      <Text style={styles.subsectionTitle}>Saved machines</Text>
+                      {userMachines.length > 0 ? (
+                        <View style={styles.machineList}>
+                          {userMachines.map((machine) => {
+                            const selected = selectedMachine?.id === machine.id;
 
-                        return (
-                          <Pressable
-                            key={machine.id}
-                            onPress={() => setSelectedMachine(machine)}
-                            style={({ pressed }) => [
-                              styles.machineRow,
-                              selected && styles.machineRowSelected,
-                              pressed && styles.pressed,
-                            ]}
-                          >
-                            <View style={styles.machineInfo}>
-                              <Text style={styles.machineName}>{machine.name}</Text>
-                              <Text style={styles.machineMeta}>
-                                {[machine.manufacturer, machine.model_number].filter(Boolean).join(' ') || 'No model details'}
-                              </Text>
-                            </View>
-                            <Text style={[styles.selectLabel, selected && styles.selectLabelSelected]}>{selected ? 'Selected' : 'Choose'}</Text>
-                          </Pressable>
-                        );
-                      })}
+                            return (
+                              <View key={machine.id} style={[styles.machineRow, selected && styles.machineRowSelected]}>
+                                <View style={styles.machineInfo}>
+                                  <Text style={styles.machineName}>{machine.name}</Text>
+                                  <Text style={styles.machineMeta}>
+                                    {[machine.manufacturer, machine.model_number].filter(Boolean).join(' ') || 'No model details'}
+                                  </Text>
+                                </View>
+                                <View style={styles.machineActionStack}>
+                                  <Pressable
+                                    onPress={() => selectMachine(machine)}
+                                    style={({ pressed }) => [styles.machineMiniButton, selected && styles.machineMiniButtonActive, pressed && styles.buttonPressed]}
+                                  >
+                                    <Text style={[styles.machineMiniButtonText, selected && styles.machineMiniButtonTextActive]}>
+                                      {selected ? 'Active' : 'Use'}
+                                    </Text>
+                                  </Pressable>
+                                  <Pressable
+                                    disabled={removeUserMachine.isPending}
+                                    onPress={() => removeMachineFromUserList(machine)}
+                                    style={({ pressed }) => [
+                                      styles.machineMiniButton,
+                                      styles.machineMiniButtonDanger,
+                                      removeUserMachine.isPending && styles.buttonDisabled,
+                                      pressed && styles.buttonPressed,
+                                    ]}
+                                  >
+                                    <Text style={styles.machineMiniButtonText}>{removeUserMachine.isPending ? 'Removing' : 'Remove'}</Text>
+                                  </Pressable>
+                                </View>
+                              </View>
+                            );
+                          })}
+                        </View>
+                      ) : (
+                        <View style={styles.stateBox}>
+                          <Text style={styles.stateText}>No saved machines yet. Add one from the catalog.</Text>
+                        </View>
+                      )}
+
+                      {machineMutationError ? <Text style={styles.error}>{machineMutationError}</Text> : null}
                     </View>
                   )}
 
-                  <Pressable
-                    disabled={!selectedMachine}
-                    onPress={() => setStep('upload')}
-                    style={({ pressed }) => [styles.fullButton, !selectedMachine && styles.buttonDisabled, pressed && styles.buttonPressed]}
-                  >
-                    <Text style={styles.buttonText}>Continue</Text>
-                  </Pressable>
                 </View>
               ) : null}
 
-              {step === 'upload' ? (
+              {page === 'diagnosis' && diagnosisStep === 'upload' ? (
                 <View>
-                  <Text style={styles.sectionTitle}>Upload screenshot</Text>
+                  <View style={styles.pageTitleRow}>
+                    <Text style={[styles.sectionTitle, styles.pageTitle]}>Upload screenshot</Text>
+                    <Pressable onPress={() => setPage('dashboard')} style={({ pressed }) => [styles.pageBackButton, pressed && styles.buttonPressed]}>
+                      <Text style={styles.pageBackText}>Back to Dashboard</Text>
+                    </Pressable>
+                  </View>
                   <Text style={styles.helperText}>The image is checked for resolution and blur before it is sent to Gemini.</Text>
 
                   {selectedImage ? (
@@ -683,7 +1910,7 @@ function MachineErrorHelper() {
 
                   {imageValidationPending ? (
                     <View style={styles.inlineState}>
-                      <ActivityIndicator color="#ffd21e" />
+                      <ActivityIndicator color="#8fb7ff" />
                       <Text style={styles.inlineStateText}>Checking image quality</Text>
                     </View>
                   ) : null}
@@ -692,7 +1919,7 @@ function MachineErrorHelper() {
 
                   {upload.isPending || diagnosis.data?.status === 'processing' || diagnosis.data?.status === 'uploaded' ? (
                     <View style={styles.inlineState}>
-                      <ActivityIndicator color="#ffd21e" />
+                      <ActivityIndicator color="#8fb7ff" />
                       <Text style={styles.inlineStateText}>Extracting visible codes</Text>
                     </View>
                   ) : null}
@@ -701,9 +1928,6 @@ function MachineErrorHelper() {
                   {diagnosis.error ? <Text style={styles.error}>{diagnosis.error.message}</Text> : null}
 
                   <View style={styles.navRow}>
-                    <Pressable onPress={() => setStep('machine')} style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}>
-                      <Text style={styles.secondaryButtonText}>Back</Text>
-                    </Pressable>
                     <Pressable
                       disabled={!canAnalyze}
                       onPress={() => selectedMachine && selectedImage && upload.mutate({ machineId: selectedMachine.id, asset: selectedImage })}
@@ -715,10 +1939,17 @@ function MachineErrorHelper() {
                 </View>
               ) : null}
 
-              {step === 'confirm' ? (
+              {page === 'diagnosis' && diagnosisStep === 'confirm' ? (
                 <View>
-                  <Text style={styles.sectionTitle}>Confirm detected codes</Text>
-                  <Text style={styles.helperText}>Correct the module or code list when the OCR result is wrong. This is kept separate from admin approval.</Text>
+                  <View style={styles.pageTitleRow}>
+                    <Text style={[styles.sectionTitle, styles.pageTitle]}>Confirm detected codes</Text>
+                    <Pressable onPress={() => setPage('dashboard')} style={({ pressed }) => [styles.pageBackButton, pressed && styles.buttonPressed]}>
+                      <Text style={styles.pageBackText}>Back to Dashboard</Text>
+                    </Pressable>
+                  </View>
+                  <Text style={styles.helperText}>Correct the module or code list when the OCR result is wrong.</Text>
+
+                  {confirmScreenshotSource ? <ScreenshotViewer source={confirmScreenshotSource} /> : null}
 
                   <View style={styles.detectedBox}>
                     <Text style={styles.detectedLabel}>AI detected</Text>
@@ -733,7 +1964,7 @@ function MachineErrorHelper() {
                         autoCapitalize="characters"
                         onChangeText={setModuleKey}
                         placeholder="PLUGSA"
-                        placeholderTextColor="#77736a"
+                        placeholderTextColor="#7f8490"
                         style={styles.input}
                         value={moduleKey}
                       />
@@ -746,7 +1977,7 @@ function MachineErrorHelper() {
                         multiline
                         onChangeText={setManualCode}
                         placeholder="250 251 260"
-                        placeholderTextColor="#77736a"
+                        placeholderTextColor="#7f8490"
                         style={[styles.input, styles.inputTall]}
                         value={manualCode}
                       />
@@ -756,7 +1987,7 @@ function MachineErrorHelper() {
                   {manualLookup.error ? <Text style={styles.error}>{manualLookup.error.message}</Text> : null}
 
                   <View style={styles.navRow}>
-                    <Pressable onPress={() => setStep('upload')} style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}>
+                    <Pressable onPress={() => setDiagnosisStep('upload')} style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}>
                       <Text style={styles.secondaryButtonText}>Back</Text>
                     </Pressable>
                     <Pressable
@@ -777,13 +2008,18 @@ function MachineErrorHelper() {
                 </View>
               ) : null}
 
-              {step === 'result' ? (
+              {page === 'diagnosis' && diagnosisStep === 'result' ? (
                 <View>
-                  <Text style={styles.sectionTitle}>Error preview</Text>
+                  <View style={styles.pageTitleRow}>
+                    <Text style={[styles.sectionTitle, styles.pageTitle]}>Error preview</Text>
+                    <Pressable onPress={() => setPage('dashboard')} style={({ pressed }) => [styles.pageBackButton, pressed && styles.buttonPressed]}>
+                      <Text style={styles.pageBackText}>Back to Dashboard</Text>
+                    </Pressable>
+                  </View>
                   <ResultPanel detail={activeDiagnosis} />
 
                   <View style={styles.navRow}>
-                    <Pressable onPress={() => setStep('confirm')} style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}>
+                    <Pressable onPress={() => setDiagnosisStep('confirm')} style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}>
                       <Text style={styles.secondaryButtonText}>Edit Codes</Text>
                     </Pressable>
                     <Pressable onPress={startOver} style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}>
@@ -792,33 +2028,309 @@ function MachineErrorHelper() {
                   </View>
                 </View>
               ) : null}
-            </Animated.View>
+              </Animated.View>
+            </View>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
+      <Modal animationType="fade" onRequestClose={closeAddMachineModal} transparent visible={addMachineModalOpen}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalPanel}>
+            <View style={styles.pageTitleRow}>
+              <Text style={[styles.sectionTitle, styles.pageTitle]}>Add machine</Text>
+              <Pressable onPress={closeAddMachineModal} style={({ pressed }) => [styles.pageBackButton, pressed && styles.buttonPressed]}>
+                <Text style={styles.pageBackText}>Close</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.helperText}>Search the configured machine catalog by machine name, manufacturer, or model.</Text>
+
+            <View style={styles.modalInputGroup}>
+              <Text style={styles.inputLabel}>Search catalog</Text>
+              <TextInput
+                autoCapitalize="none"
+                autoFocus={addMachineModalOpen}
+                onChangeText={setMachineSearch}
+                placeholder="Start typing a machine name"
+                placeholderTextColor="#7f8490"
+                style={styles.input}
+                value={machineSearch}
+              />
+            </View>
+
+            <View style={styles.modalResultArea}>
+              {trimmedMachineSearch.length < 2 ? (
+                <View style={styles.modalMessageBox}>
+                  <Text style={styles.modalMessageText}>Enter at least 2 characters to search.</Text>
+                </View>
+              ) : machines.isLoading || machines.isFetching ? (
+                <View style={[styles.modalMessageBox, styles.modalLoadingBox]}>
+                  <ActivityIndicator color="#8fb7ff" />
+                  <Text style={styles.modalMessageText}>Searching machines</Text>
+                </View>
+              ) : machines.error ? (
+                <View style={styles.modalMessageBox}>
+                  <Text style={styles.error}>Machine search is not reachable at {apiBaseUrl}</Text>
+                </View>
+              ) : addableMachines.length > 0 ? (
+                <ScrollView contentContainerStyle={styles.modalResultList} keyboardShouldPersistTaps="handled" style={styles.modalResultViewport}>
+                  {addableMachines.map((machine) => (
+                    <View key={machine.id} style={styles.machineRow}>
+                      <View style={styles.machineInfo}>
+                        <Text style={styles.machineName}>{machine.name}</Text>
+                        <Text style={styles.machineMeta}>
+                          {[machine.manufacturer, machine.model_number].filter(Boolean).join(' ') || 'No model details'}
+                        </Text>
+                      </View>
+                      <Pressable
+                        disabled={addUserMachine.isPending}
+                        onPress={() => addMachineToUserList(machine)}
+                        style={({ pressed }) => [styles.machineMiniButton, addUserMachine.isPending && styles.buttonDisabled, pressed && styles.buttonPressed]}
+                      >
+                        <Text style={styles.machineMiniButtonText}>{addUserMachine.isPending ? 'Adding' : 'Add'}</Text>
+                      </Pressable>
+                    </View>
+                  ))}
+                </ScrollView>
+              ) : (
+                <View style={styles.modalMessageBox}>
+                  <Text style={styles.modalMessageText}>
+                    {(machines.data ?? []).length > 0 ? 'All matching machines are already saved.' : 'No matching machines found.'}
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {addMachineError ? <Text style={styles.error}>{addMachineError}</Text> : null}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
 
 export default function App() {
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [loginPending, setLoginPending] = useState(false);
+
+  const logout = useCallback(async () => {
+    const token = authToken;
+
+    setAuthToken(null);
+    setAuthUser(null);
+    setAuthError(null);
+    queryClient.clear();
+    await forgetAuthToken();
+
+    if (token) {
+      await logoutFromApi(token);
+    }
+  }, [authToken]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function restoreSession(): Promise<void> {
+      const token = await readStoredAuthToken();
+
+      if (!token) {
+        if (!cancelled) {
+          setAuthChecking(false);
+        }
+
+        return;
+      }
+
+      try {
+        const user = await fetchCurrentUser(token);
+
+        if (!cancelled) {
+          setAuthToken(token);
+          setAuthUser(user);
+        }
+      } catch {
+        await forgetAuthToken();
+      } finally {
+        if (!cancelled) {
+          setAuthChecking(false);
+        }
+      }
+    }
+
+    restoreSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleLogin(input: { email: string; password: string }): Promise<void> {
+    setLoginPending(true);
+    setAuthError(null);
+
+    try {
+      const session = await loginToApi(input);
+
+      await storeAuthToken(session.token);
+      setAuthToken(session.token);
+      setAuthUser(session.user);
+      queryClient.clear();
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Could not log in.');
+    } finally {
+      setLoginPending(false);
+    }
+  }
+
+  async function handleRegister(input: { name: string; email: string; password: string; passwordConfirmation: string }): Promise<void> {
+    setLoginPending(true);
+    setAuthError(null);
+
+    try {
+      const session = await registerWithApi(input);
+
+      await storeAuthToken(session.token);
+      setAuthToken(session.token);
+      setAuthUser(session.user);
+      queryClient.clear();
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Could not create account.');
+    } finally {
+      setLoginPending(false);
+    }
+  }
+
+  if (authChecking) {
+    return (
+      <SafeAreaView style={styles.screen}>
+        <AmbientBackground />
+        <StatusBar style="light" />
+        <View style={styles.bootScreen}>
+          <ActivityIndicator color="#8fb7ff" />
+          <Text style={styles.stateText}>Checking session</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <QueryClientProvider client={queryClient}>
-      <MachineErrorHelper />
+      {authToken && authUser ? (
+        <MachineErrorHelper authToken={authToken} authUser={authUser} onLogout={logout} />
+      ) : (
+        <LoginScreen error={authError} isPending={loginPending} onLogin={handleLogin} onRegister={handleRegister} />
+      )}
     </QueryClientProvider>
   );
 }
 
 const styles = StyleSheet.create({
   screen: {
-    backgroundColor: '#050505',
+    backgroundColor: '#07080e',
     flex: 1,
+    overflow: 'hidden',
+  },
+  ambientRoot: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#020307',
+  },
+  backgroundBase: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#020307',
+  },
+  halftoneLayer: {
+    position: 'absolute',
+  },
+  dotRow: {
+    flexDirection: 'row',
+  },
+  dotCell: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dot: {
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
+    borderRadius: 8,
+    height: 2.4,
+    shadowColor: '#ffffff',
+    shadowOffset: { height: 0, width: 0 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    width: 2.4,
+  },
+  dotDim: {
+    backgroundColor: 'rgba(214, 224, 238, 0.76)',
+  },
+  dotMid: {
+    backgroundColor: 'rgba(244, 246, 248, 0.84)',
+    height: 2.8,
+    width: 2.8,
+  },
+  dotBright: {
+    backgroundColor: 'rgba(255, 252, 245, 0.96)',
+    height: 3.2,
+    shadowColor: '#ffffff',
+    shadowOpacity: 0.34,
+    shadowRadius: 7,
+    width: 3.2,
+  },
+  dotAqua: {
+    backgroundColor: 'rgba(89, 242, 211, 0.9)',
+    height: 3.2,
+    shadowColor: '#59f2d3',
+    shadowOpacity: 0.42,
+    shadowRadius: 10,
+    width: 3.2,
+  },
+  dotBlue: {
+    backgroundColor: 'rgba(118, 154, 255, 0.9)',
+    height: 3.2,
+    shadowColor: '#769aff',
+    shadowOpacity: 0.42,
+    shadowRadius: 10,
+    width: 3.2,
+  },
+  dotCyan: {
+    backgroundColor: 'rgba(79, 229, 255, 0.9)',
+    height: 3.2,
+    shadowColor: '#31dfff',
+    shadowOpacity: 0.46,
+    shadowRadius: 10,
+    width: 3.2,
+  },
+  dotViolet: {
+    backgroundColor: 'rgba(174, 146, 255, 0.84)',
+    height: 3.2,
+    shadowColor: '#ae92ff',
+    shadowOpacity: 0.36,
+    shadowRadius: 9,
+    width: 3.2,
+  },
+  halftoneVignette: {
+    backgroundColor: 'rgba(0, 0, 0, 0.28)',
+    bottom: 0,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
   },
   keyboard: {
     flex: 1,
+    zIndex: 1,
   },
   scrollContent: {
-    backgroundColor: '#050505',
+    backgroundColor: 'transparent',
     flexGrow: 1,
+    paddingHorizontal: 18,
+    paddingVertical: 22,
+  },
+  loginScrollContent: {
+    backgroundColor: 'transparent',
+    flexGrow: 1,
+    justifyContent: 'center',
+    padding: 18,
   },
   shell: {
     alignSelf: 'center',
@@ -826,49 +2338,171 @@ const styles = StyleSheet.create({
     minHeight: '100%',
     width: '100%',
   },
-  hero: {
-    borderBottomColor: '#2b2b2b',
+  loginShell: {
+    alignSelf: 'center',
+    maxWidth: 520,
+    width: '100%',
+  },
+  appWindow: {
+    backgroundColor: 'rgba(20, 22, 29, 0.72)',
+    borderColor: 'rgba(255, 255, 255, 0.14)',
+    borderRadius: 8,
+    borderWidth: 1,
+    overflow: 'hidden',
+    shadowColor: '#000000',
+    shadowOffset: { height: 24, width: 0 },
+    shadowOpacity: 0.34,
+    shadowRadius: 42,
+    elevation: 14,
+  },
+  loginWindow: {
+    backgroundColor: 'rgba(20, 22, 29, 0.72)',
+    borderColor: 'rgba(255, 255, 255, 0.16)',
+    borderRadius: 8,
+    borderWidth: 1,
+    overflow: 'hidden',
+    shadowColor: '#000000',
+    shadowOffset: { height: 24, width: 0 },
+    shadowOpacity: 0.36,
+    shadowRadius: 42,
+    elevation: 14,
+  },
+  windowToolbar: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(26, 28, 35, 0.78)',
+    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
     borderBottomWidth: 1,
-    minHeight: 205,
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 46,
+    paddingHorizontal: 14,
   },
-  heroImage: {
-    opacity: 0.54,
+  windowControls: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 7,
+    width: 74,
   },
-  heroShade: {
-    backgroundColor: 'rgba(5, 5, 5, 0.7)',
+  windowDot: {
+    borderRadius: 8,
+    height: 11,
+    width: 11,
+  },
+  windowDotClose: {
+    backgroundColor: '#ff5f57',
+  },
+  windowDotMinimize: {
+    backgroundColor: '#ffbd2e',
+  },
+  windowDotMaximize: {
+    backgroundColor: '#28c840',
+  },
+  windowTitle: {
+    color: '#d9dde8',
     flex: 1,
-    justifyContent: 'flex-end',
-    paddingBottom: 22,
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0,
+    textAlign: 'center',
+  },
+  windowToolbarSpacer: {
+    width: 74,
+  },
+  loginHero: {
+    backgroundColor: 'rgba(255, 255, 255, 0.045)',
+    borderBottomColor: 'rgba(255, 255, 255, 0.08)',
+    borderBottomWidth: 1,
+    minHeight: 190,
+    paddingBottom: 24,
     paddingHorizontal: 20,
-    paddingTop: 42,
+    paddingTop: 34,
+  },
+  logoutButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.055)',
+    borderColor: 'rgba(255, 255, 255, 0.16)',
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  logoutText: {
+    color: '#d9dde8',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
   },
   eyebrow: {
-    color: '#ffd21e',
+    color: '#8fb7ff',
     fontSize: 13,
     fontWeight: '800',
     letterSpacing: 0,
     textTransform: 'uppercase',
   },
   title: {
-    color: '#fff8d6',
-    fontSize: 30,
+    color: '#f7f8fb',
+    fontSize: 32,
     fontWeight: '900',
     letterSpacing: 0,
-    lineHeight: 36,
+    lineHeight: 38,
     marginTop: 8,
     maxWidth: 720,
+    textShadowColor: 'rgba(0, 0, 0, 0.38)',
+    textShadowOffset: { height: 1, width: 0 },
+    textShadowRadius: 8,
   },
   subtitle: {
-    color: '#d5d0c2',
+    color: '#b8bfcc',
     fontSize: 16,
     lineHeight: 23,
     marginTop: 10,
     maxWidth: 680,
   },
+  pageTitleRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  pageBackButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.055)',
+    borderColor: 'rgba(255, 255, 255, 0.16)',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexShrink: 0,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+  },
+  pageBackText: {
+    color: '#d9dde8',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+  },
+  addMachineButton: {
+    alignItems: 'center',
+    backgroundColor: '#8fb7ff',
+    borderColor: '#c7d8ff',
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: 'center',
+    marginTop: 16,
+    minHeight: 48,
+    paddingHorizontal: 14,
+    shadowColor: '#8fb7ff',
+    shadowOffset: { height: 8, width: 0 },
+    shadowOpacity: 0.2,
+    shadowRadius: 14,
+  },
   stepper: {
-    backgroundColor: '#101010',
-    borderBottomColor: '#2b2b2b',
+    backgroundColor: 'rgba(17, 19, 25, 0.72)',
+    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
     borderBottomWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.08)',
+    borderTopWidth: 1,
     flexDirection: 'row',
     gap: 8,
     paddingHorizontal: 14,
@@ -881,21 +2515,31 @@ const styles = StyleSheet.create({
   },
   stepDot: {
     alignItems: 'center',
-    backgroundColor: '#161616',
-    borderColor: '#5a5a5a',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderColor: 'rgba(255, 255, 255, 0.18)',
     borderRadius: 8,
     borderWidth: 1,
     height: 32,
     justifyContent: 'center',
+    position: 'relative',
+    width: 32,
+  },
+  stepPulse: {
+    backgroundColor: 'rgba(143, 183, 255, 0.14)',
+    borderColor: 'rgba(143, 183, 255, 0.36)',
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 32,
+    position: 'absolute',
     width: 32,
   },
   stepDotActive: {
-    backgroundColor: '#ffd21e',
-    borderColor: '#ffd21e',
+    backgroundColor: '#8fb7ff',
+    borderColor: '#c7d8ff',
   },
   stepDotDone: {
-    backgroundColor: '#2a2108',
-    borderColor: '#ffae24',
+    backgroundColor: 'rgba(143, 183, 255, 0.12)',
+    borderColor: 'rgba(143, 183, 255, 0.4)',
   },
   stepNumber: {
     color: '#f0ead9',
@@ -907,38 +2551,163 @@ const styles = StyleSheet.create({
     color: '#111111',
   },
   stepNumberDone: {
-    color: '#ffd21e',
+    color: '#8fb7ff',
   },
   stepText: {
-    color: '#8d8a82',
+    color: '#9d9a91',
     fontSize: 12,
     fontWeight: '800',
     letterSpacing: 0,
     textAlign: 'center',
   },
   stepTextActive: {
-    color: '#fff8d6',
+    color: '#f7f8fb',
   },
   stepCard: {
-    borderColor: '#333333',
+    backgroundColor: 'rgba(22, 24, 31, 0.66)',
+    borderColor: 'rgba(255, 255, 255, 0.13)',
     borderRadius: 8,
     borderWidth: 1,
-    margin: 20,
+    margin: 18,
+    overflow: 'hidden',
     padding: 16,
+    shadowColor: '#000000',
+    shadowOffset: { height: 18, width: 0 },
+    shadowOpacity: 0.24,
+    shadowRadius: 28,
+    elevation: 12,
+  },
+  loginPanel: {
+    backgroundColor: 'rgba(22, 24, 31, 0.62)',
+    borderBottomLeftRadius: 8,
+    borderBottomRightRadius: 8,
+    borderColor: 'rgba(255, 255, 255, 0.13)',
+    borderTopWidth: 0,
+    borderWidth: 1,
+    overflow: 'hidden',
+    padding: 16,
+    shadowColor: '#000000',
+    shadowOffset: { height: 18, width: 0 },
+    shadowOpacity: 0.22,
+    shadowRadius: 28,
+    elevation: 12,
   },
   sectionTitle: {
-    color: '#ffae24',
+    color: '#f7f8fb',
     fontSize: 16,
     fontWeight: '900',
     letterSpacing: 0,
     marginBottom: 8,
+    textShadowColor: 'rgba(143, 183, 255, 0.18)',
+    textShadowOffset: { height: 0, width: 0 },
+    textShadowRadius: 10,
     textTransform: 'uppercase',
   },
+  pageTitle: {
+    flexShrink: 1,
+    marginBottom: 0,
+  },
   helperText: {
-    color: '#c3beb2',
+    color: '#b8bfcc',
     fontSize: 14,
     letterSpacing: 0,
     lineHeight: 20,
+  },
+  dashboardGrid: {
+    gap: 12,
+    marginTop: 16,
+  },
+  dashboardCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.045)',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 14,
+    padding: 14,
+    shadowColor: '#000000',
+    shadowOffset: { height: 10, width: 0 },
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+  },
+  dashboardCardHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  dashboardKicker: {
+    color: '#8fb7ff',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+  },
+  dashboardTitle: {
+    color: '#f7f8fb',
+    fontSize: 21,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 26,
+    marginTop: 3,
+  },
+  dashboardStatus: {
+    backgroundColor: 'rgba(255, 255, 255, 0.055)',
+    borderColor: 'rgba(255, 255, 255, 0.14)',
+    borderRadius: 8,
+    borderWidth: 1,
+    color: '#b8bfcc',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+    overflow: 'hidden',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    textTransform: 'uppercase',
+  },
+  dashboardStatusActive: {
+    backgroundColor: 'rgba(143, 183, 255, 0.12)',
+    borderColor: 'rgba(143, 183, 255, 0.34)',
+    color: '#c7d8ff',
+  },
+  dashboardText: {
+    color: '#c4cad6',
+    fontSize: 14,
+    letterSpacing: 0,
+    lineHeight: 20,
+  },
+  subsectionTitle: {
+    color: '#d9dde8',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+    marginTop: 16,
+    textTransform: 'uppercase',
+  },
+  savedMachineList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  savedMachinePill: {
+    backgroundColor: 'rgba(255, 255, 255, 0.055)',
+    borderColor: 'rgba(255, 255, 255, 0.14)',
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  savedMachinePillActive: {
+    backgroundColor: 'rgba(143, 183, 255, 0.13)',
+    borderColor: 'rgba(143, 183, 255, 0.42)',
+  },
+  savedMachineText: {
+    color: '#b8bfcc',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  savedMachineTextActive: {
+    color: '#dbe6ff',
   },
   machineList: {
     gap: 10,
@@ -946,8 +2715,8 @@ const styles = StyleSheet.create({
   },
   machineRow: {
     alignItems: 'center',
-    backgroundColor: '#151515',
-    borderColor: '#333333',
+    backgroundColor: 'rgba(255, 255, 255, 0.052)',
+    borderColor: 'rgba(255, 255, 255, 0.13)',
     borderRadius: 8,
     borderWidth: 1,
     flexDirection: 'row',
@@ -955,10 +2724,14 @@ const styles = StyleSheet.create({
     minHeight: 74,
     paddingHorizontal: 14,
     paddingVertical: 12,
+    shadowColor: '#000000',
+    shadowOffset: { height: 8, width: 0 },
+    shadowOpacity: 0.16,
+    shadowRadius: 16,
   },
   machineRowSelected: {
-    backgroundColor: '#1b170b',
-    borderColor: '#ffd21e',
+    backgroundColor: 'rgba(143, 183, 255, 0.14)',
+    borderColor: 'rgba(143, 183, 255, 0.82)',
     borderWidth: 2,
   },
   machineInfo: {
@@ -966,28 +2739,59 @@ const styles = StyleSheet.create({
     paddingRight: 12,
   },
   machineName: {
-    color: '#fff8d6',
+    color: '#f7f8fb',
     fontSize: 17,
     fontWeight: '800',
     letterSpacing: 0,
   },
   machineMeta: {
-    color: '#aaa59a',
+    color: '#b8b2a5',
     fontSize: 14,
     letterSpacing: 0,
     marginTop: 3,
   },
+  machineActionStack: {
+    alignItems: 'flex-end',
+    gap: 7,
+  },
+  machineMiniButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.055)',
+    borderColor: 'rgba(255, 255, 255, 0.16)',
+    borderRadius: 8,
+    borderWidth: 1,
+    minWidth: 74,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  machineMiniButtonActive: {
+    backgroundColor: 'rgba(143, 183, 255, 0.13)',
+    borderColor: 'rgba(143, 183, 255, 0.42)',
+  },
+  machineMiniButtonDanger: {
+    borderColor: 'rgba(255, 107, 61, 0.3)',
+  },
+  machineMiniButtonText: {
+    color: '#d9dde8',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+  },
+  machineMiniButtonTextActive: {
+    color: '#c7d8ff',
+  },
   selectLabel: {
-    color: '#ffae24',
+    color: '#8fb7ff',
     fontSize: 14,
     fontWeight: '800',
     letterSpacing: 0,
   },
   selectLabelSelected: {
-    color: '#ffd21e',
+    color: '#c7d8ff',
   },
   previewImage: {
-    backgroundColor: '#111111',
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
     borderRadius: 8,
     height: 230,
     marginTop: 16,
@@ -995,8 +2799,8 @@ const styles = StyleSheet.create({
   },
   previewEmpty: {
     alignItems: 'center',
-    backgroundColor: '#101010',
-    borderColor: '#333333',
+    backgroundColor: 'rgba(255, 255, 255, 0.035)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
     borderRadius: 8,
     borderWidth: 1,
     height: 190,
@@ -1008,6 +2812,43 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
     letterSpacing: 0,
+  },
+  screenshotCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 16,
+    overflow: 'hidden',
+    padding: 12,
+  },
+  screenshotCardHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+  },
+  screenshotCardTitleWrap: {
+    flex: 1,
+    gap: 4,
+  },
+  screenshotCardText: {
+    color: '#d9d4c6',
+    fontSize: 14,
+    letterSpacing: 0,
+    lineHeight: 20,
+  },
+  screenshotPreviewFrame: {
+    backgroundColor: 'rgba(7, 8, 14, 0.72)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 12,
+    overflow: 'hidden',
+  },
+  screenshotPreviewImage: {
+    backgroundColor: 'rgba(255, 255, 255, 0.02)',
+    width: '100%',
   },
   actionRow: {
     flexDirection: 'row',
@@ -1021,16 +2862,24 @@ const styles = StyleSheet.create({
   },
   button: {
     alignItems: 'center',
-    backgroundColor: '#ffd21e',
+    backgroundColor: '#8fb7ff',
+    borderColor: '#c7d8ff',
     borderRadius: 8,
+    borderWidth: 1,
     flex: 1,
     justifyContent: 'center',
     minHeight: 50,
     paddingHorizontal: 14,
+    shadowColor: '#8fb7ff',
+    shadowOffset: { height: 8, width: 0 },
+    shadowOpacity: 0.22,
+    shadowRadius: 14,
+    elevation: 6,
   },
   secondaryButton: {
     alignItems: 'center',
-    borderColor: '#ffd21e',
+    backgroundColor: 'rgba(255, 255, 255, 0.055)',
+    borderColor: 'rgba(255, 255, 255, 0.16)',
     borderRadius: 8,
     borderWidth: 1,
     flex: 1,
@@ -1040,16 +2889,36 @@ const styles = StyleSheet.create({
   },
   fullButton: {
     alignItems: 'center',
-    backgroundColor: '#ffd21e',
+    backgroundColor: '#8fb7ff',
+    borderColor: '#c7d8ff',
     borderRadius: 8,
+    borderWidth: 1,
     justifyContent: 'center',
     marginTop: 16,
     minHeight: 50,
     paddingHorizontal: 14,
+    shadowColor: '#8fb7ff',
+    shadowOffset: { height: 8, width: 0 },
+    shadowOpacity: 0.22,
+    shadowRadius: 14,
+    elevation: 6,
+  },
+  authSwitchButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
+    marginTop: 10,
+  },
+  authSwitchText: {
+    color: '#8fb7ff',
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
   },
   buttonDisabled: {
-    backgroundColor: '#343434',
-    borderColor: '#343434',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    shadowOpacity: 0,
   },
   buttonPressed: {
     opacity: 0.86,
@@ -1058,13 +2927,13 @@ const styles = StyleSheet.create({
     opacity: 0.9,
   },
   buttonText: {
-    color: '#111111',
+    color: '#10131a',
     fontSize: 16,
     fontWeight: '900',
     letterSpacing: 0,
   },
   secondaryButtonText: {
-    color: '#ffd21e',
+    color: '#d9dde8',
     fontSize: 16,
     fontWeight: '900',
     letterSpacing: 0,
@@ -1076,7 +2945,7 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   inlineStateText: {
-    color: '#fff8d6',
+    color: '#f7f8fb',
     fontSize: 14,
     fontWeight: '700',
     letterSpacing: 0,
@@ -1088,19 +2957,19 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   qualityPass: {
-    backgroundColor: '#10180d',
-    borderColor: '#68d86f',
+    backgroundColor: 'rgba(27, 85, 42, 0.2)',
+    borderColor: 'rgba(104, 216, 111, 0.55)',
   },
   qualityWarn: {
-    backgroundColor: '#211a08',
-    borderColor: '#ffd21e',
+    backgroundColor: 'rgba(143, 183, 255, 0.1)',
+    borderColor: 'rgba(143, 183, 255, 0.48)',
   },
   qualityFail: {
-    backgroundColor: '#220d0a',
-    borderColor: '#ff6b3d',
+    backgroundColor: 'rgba(255, 107, 61, 0.12)',
+    borderColor: 'rgba(255, 107, 61, 0.62)',
   },
   qualityTitle: {
-    color: '#fff8d6',
+    color: '#f7f8fb',
     fontSize: 15,
     fontWeight: '900',
     letterSpacing: 0,
@@ -1120,29 +2989,29 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   detectedBox: {
-    backgroundColor: '#101010',
-    borderColor: '#333333',
+    backgroundColor: 'rgba(255, 255, 255, 0.045)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
     borderRadius: 8,
     borderWidth: 1,
     marginTop: 16,
     padding: 12,
   },
   detectedLabel: {
-    color: '#8d8a82',
+    color: '#a9a49a',
     fontSize: 12,
     fontWeight: '900',
     letterSpacing: 0,
     textTransform: 'uppercase',
   },
   detectedText: {
-    color: '#ffd21e',
+    color: '#8fb7ff',
     fontSize: 22,
     fontWeight: '900',
     letterSpacing: 0,
     marginTop: 5,
   },
   detectedSubText: {
-    color: '#fff8d6',
+    color: '#f7f8fb',
     fontSize: 16,
     fontWeight: '800',
     letterSpacing: 0,
@@ -1156,7 +3025,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   inputLabel: {
-    color: '#8d8a82',
+    color: '#a9a49a',
     fontSize: 12,
     fontWeight: '800',
     letterSpacing: 0,
@@ -1164,11 +3033,11 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   input: {
-    backgroundColor: '#101010',
-    borderColor: '#353535',
+    backgroundColor: 'rgba(255, 255, 255, 0.055)',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
     borderRadius: 8,
     borderWidth: 1,
-    color: '#fff8d6',
+    color: '#f7f8fb',
     fontSize: 16,
     fontWeight: '800',
     letterSpacing: 0,
@@ -1181,15 +3050,21 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   resultPanel: {
-    borderColor: '#414141',
+    backgroundColor: 'rgba(255, 255, 255, 0.035)',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
     borderRadius: 8,
     borderWidth: 1,
     marginTop: 12,
+    overflow: 'hidden',
+    shadowColor: '#000000',
+    shadowOffset: { height: 12, width: 0 },
+    shadowOpacity: 0.22,
+    shadowRadius: 22,
   },
   resultHeader: {
     alignItems: 'center',
-    backgroundColor: '#111111',
-    borderBottomColor: '#333333',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
     borderBottomWidth: 1,
     borderTopLeftRadius: 8,
     borderTopRightRadius: 8,
@@ -1199,25 +3074,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   kicker: {
-    color: '#8d8a82',
+    color: '#a9a49a',
     fontSize: 12,
     fontWeight: '800',
     letterSpacing: 0,
     textTransform: 'uppercase',
   },
   resultTitle: {
-    color: '#fff8d6',
+    color: '#f7f8fb',
     fontSize: 19,
     fontWeight: '900',
     letterSpacing: 0,
     marginTop: 3,
   },
   badge: {
-    backgroundColor: '#211a08',
-    borderColor: '#ffd21e',
+    backgroundColor: 'rgba(143, 183, 255, 0.11)',
+    borderColor: 'rgba(143, 183, 255, 0.55)',
     borderRadius: 8,
     borderWidth: 1,
-    color: '#ffd21e',
+    color: '#c7d8ff',
     fontSize: 13,
     fontWeight: '900',
     letterSpacing: 0,
@@ -1232,8 +3107,8 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   matchCard: {
-    backgroundColor: '#101010',
-    borderColor: '#333333',
+    backgroundColor: 'rgba(8, 9, 10, 0.68)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
     borderRadius: 8,
     borderWidth: 1,
     padding: 12,
@@ -1244,7 +3119,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   matchCode: {
-    color: '#ffd21e',
+    color: '#8fb7ff',
     fontSize: 22,
     fontWeight: '900',
     letterSpacing: 0,
@@ -1257,13 +3132,19 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   matchScore: {
-    color: '#fff8d6',
+    backgroundColor: 'rgba(143, 183, 255, 0.1)',
+    borderColor: 'rgba(143, 183, 255, 0.28)',
+    borderRadius: 8,
+    borderWidth: 1,
+    color: '#f7f8fb',
     fontSize: 14,
     fontWeight: '900',
     letterSpacing: 0,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
   },
   matchTitle: {
-    color: '#fff8d6',
+    color: '#f7f8fb',
     fontSize: 16,
     fontWeight: '900',
     letterSpacing: 0,
@@ -1274,7 +3155,7 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   textLabel: {
-    color: '#ffae24',
+    color: '#8fb7ff',
     fontSize: 12,
     fontWeight: '900',
     letterSpacing: 0,
@@ -1289,13 +3170,177 @@ const styles = StyleSheet.create({
   },
   stateBox: {
     alignItems: 'center',
-    borderColor: '#333333',
+    backgroundColor: 'rgba(255, 255, 255, 0.035)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
     borderRadius: 8,
     borderWidth: 1,
     justifyContent: 'center',
     marginTop: 16,
     minHeight: 132,
     padding: 18,
+  },
+  bootScreen: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'center',
+    padding: 20,
+  },
+  modalBackdrop: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.58)',
+    flex: 1,
+    justifyContent: 'center',
+    padding: 18,
+  },
+  imageViewerBackdrop: {
+    backgroundColor: 'rgba(2, 3, 7, 0.92)',
+    flex: 1,
+    padding: 16,
+  },
+  imageViewerPanel: {
+    alignSelf: 'center',
+    flex: 1,
+    gap: 14,
+    maxWidth: 1200,
+    width: '100%',
+  },
+  imageViewerHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+  },
+  imageViewerTitleWrap: {
+    flex: 1,
+  },
+  imageViewerToolbar: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  viewerToolButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.055)',
+    borderColor: 'rgba(255, 255, 255, 0.16)',
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 42,
+    justifyContent: 'center',
+    width: 42,
+  },
+  viewerToolButtonText: {
+    color: '#f7f8fb',
+    fontSize: 24,
+    fontWeight: '700',
+    lineHeight: 24,
+  },
+  viewerActionButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.055)',
+    borderColor: 'rgba(255, 255, 255, 0.16)',
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: 40,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  viewerActionButtonText: {
+    color: '#d9dde8',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+  },
+  imageViewerZoomText: {
+    color: '#f7f8fb',
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0,
+    minWidth: 58,
+    textAlign: 'center',
+  },
+  imageViewerViewport: {
+    backgroundColor: 'rgba(7, 8, 14, 0.86)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 8,
+    borderWidth: 1,
+    flex: 1,
+    overflow: 'hidden',
+  },
+  imageViewerHorizontalContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  imageViewerVerticalContent: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  imageViewerImageFrame: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  imageViewerImage: {
+    height: '100%',
+    width: '100%',
+  },
+  modalPanel: {
+    backgroundColor: 'rgba(20, 22, 29, 0.96)',
+    borderColor: 'rgba(255, 255, 255, 0.14)',
+    borderRadius: 8,
+    borderWidth: 1,
+    overflow: 'hidden',
+    maxHeight: '86%',
+    maxWidth: 680,
+    padding: 16,
+    shadowColor: '#000000',
+    shadowOffset: { height: 24, width: 0 },
+    shadowOpacity: 0.36,
+    shadowRadius: 42,
+    width: '100%',
+  },
+  modalInputGroup: {
+    flexGrow: 0,
+    flexShrink: 0,
+    marginTop: 16,
+  },
+  modalResultArea: {
+    flexGrow: 0,
+    flexShrink: 1,
+    marginTop: 16,
+  },
+  modalResultViewport: {
+    flexGrow: 0,
+    flexShrink: 1,
+    maxHeight: 360,
+  },
+  modalResultList: {
+    gap: 10,
+    paddingBottom: 4,
+  },
+  modalMessageBox: {
+    alignItems: 'flex-start',
+    backgroundColor: 'rgba(255, 255, 255, 0.035)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: 58,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  modalLoadingBox: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  modalMessageText: {
+    color: '#bbb7ad',
+    fontSize: 14,
+    letterSpacing: 0,
+    lineHeight: 20,
+    textAlign: 'left',
   },
   stateText: {
     color: '#bbb7ad',

@@ -2,8 +2,8 @@
 
 namespace App\Filament\Resources\ManualExtractionCandidates\Schemas;
 
-use Filament\Forms\Components\Select;
 use Filament\Forms\Components\KeyValue;
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\Textarea;
 use Filament\Forms\Components\TextInput;
 use Filament\Schemas\Schema;
@@ -16,8 +16,8 @@ class ManualExtractionCandidateForm
             ->components([
                 Select::make('status')
                     ->options([
-                        'pending' => 'Pending review',
-                        'approved' => 'Approved',
+                        'pending' => 'Pending import',
+                        'published' => 'Published',
                         'rejected' => 'Rejected',
                         'ignored' => 'Ignored',
                     ])

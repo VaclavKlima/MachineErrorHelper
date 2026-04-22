@@ -130,9 +130,11 @@ class ManualAiExtractionService
                 ],
             ];
 
-            ManualExtractionCandidate::create(
+            $candidate = ManualExtractionCandidate::create(
                 array_merge($candidate, app(ManualExtractionCandidateReviewClassifier::class)->classify($candidate))
             );
+
+            app(ManualExtractionCandidatePublishingService::class)->publish($candidate);
 
             $created++;
         }

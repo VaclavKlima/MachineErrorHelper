@@ -4,7 +4,6 @@ namespace App\Filament\Resources\Manuals\Tables;
 
 use App\Jobs\ProcessManualImport;
 use App\Models\Manual;
-use App\Services\ManualExtractionCandidateAutoApprovalService;
 use Filament\Actions\Action;
 use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteBulkAction;
@@ -48,7 +47,7 @@ class ManualsTable
                     ->sortable(),
                 TextColumn::make('extraction_candidates_count')
                     ->counts('extractionCandidates')
-                    ->label('Suggestions')
+                    ->label('Extracted codes')
                     ->sortable(),
                 TextColumn::make('created_at')
                     ->dateTime()
@@ -103,25 +102,6 @@ class ManualsTable
                             ->success()
                             ->title('Extraction requeued')
                             ->body('The manual import job was queued again. A lock prevents two imports for this manual from running at the same time.')
-                            ->send();
-                    }),
-                Action::make('autoApproveSuggestions')
-                    ->label('Approve high-confidence')
-                    ->color('success')
-                    ->requiresConfirmation()
-                    ->modalHeading('Approve high-confidence suggestions?')
-                    ->modalDescription(fn (Manual $record, ManualExtractionCandidateAutoApprovalService $service): string => sprintf(
-                        'This will approve %d pending high-confidence suggestions for this manual and publish them to Diagnostic knowledge.',
-                        $service->countForManual($record),
-                    ))
-                    ->visible(fn (Manual $record, ManualExtractionCandidateAutoApprovalService $service): bool => $service->countForManual($record) > 0)
-                    ->action(function (Manual $record, ManualExtractionCandidateAutoApprovalService $service): void {
-                        $approved = $service->approveForManual($record, auth()->user());
-
-                        Notification::make()
-                            ->success()
-                            ->title('Diagnostic knowledge updated')
-                            ->body("Approved {$approved} high-confidence suggestions.")
                             ->send();
                     }),
             ])

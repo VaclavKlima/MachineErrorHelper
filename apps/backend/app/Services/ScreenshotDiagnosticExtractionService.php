@@ -2,8 +2,8 @@
 
 namespace App\Services;
 
-use App\Models\DiagnosticEntry;
 use App\Models\DiagnosisRequest;
+use App\Models\DiagnosticEntry;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Prism\Prism\Enums\Provider;
@@ -222,7 +222,7 @@ PROMPT;
     {
         $baseQuery = DiagnosticEntry::query()
             ->where('machine_id', $diagnosis->machine_id)
-            ->where('status', 'approved')
+            ->where('status', 'active')
             ->whereIn('primary_code_normalized', $this->codeMatchVariants($code));
 
         if ($moduleKey) {

@@ -77,9 +77,9 @@ class ManualImportService
             });
 
             $chunkIndex = 0;
-            $suggestions = 0;
+            $extractedCodes = 0;
             $aiChunks = 0;
-            $aiSuggestions = 0;
+            $aiExtractedCodes = 0;
 
             $currentSectionTitle = null;
             $aiExtractor = app(ManualAiExtractionService::class);
@@ -113,7 +113,7 @@ class ManualImportService
                         ],
                     ]);
 
-                    $suggestions += $this->suggestDiagnosticEntries(
+                    $extractedCodes += $this->suggestDiagnosticEntries(
                         $manual,
                         $chunk,
                         $pageNumber,
@@ -121,7 +121,7 @@ class ManualImportService
                         $moduleKey,
                     );
 
-                    $suggestions += $this->suggestTextDiagnosticEntries(
+                    $extractedCodes += $this->suggestTextDiagnosticEntries(
                         $manual,
                         $chunk,
                         $pageNumber,
@@ -129,7 +129,7 @@ class ManualImportService
                         $moduleKey,
                     );
 
-                    $suggestions += $this->suggestDiagnosticBlockEntries(
+                    $extractedCodes += $this->suggestDiagnosticBlockEntries(
                         $manual,
                         $chunk,
                         $pageNumber,
@@ -150,8 +150,8 @@ class ManualImportService
                             $moduleKey,
                         );
 
-                        $suggestions += $createdByAi;
-                        $aiSuggestions += $createdByAi;
+                        $extractedCodes += $createdByAi;
+                        $aiExtractedCodes += $createdByAi;
                         $aiChunks++;
                     }
                 }
@@ -162,9 +162,9 @@ class ManualImportService
                             'pages' => $pageCount,
                             'pages_processed' => $pageNumber,
                             'chunks' => $chunkIndex,
-                            'suggestions' => $suggestions,
+                            'extracted_codes' => $extractedCodes,
                             'ai_chunks' => $aiChunks,
-                            'ai_suggestions' => $aiSuggestions,
+                            'ai_extracted_codes' => $aiExtractedCodes,
                         ],
                     ])->save();
                 }
@@ -179,9 +179,9 @@ class ManualImportService
                     'pages' => $pageCount,
                     'pages_processed' => $pageCount,
                     'chunks' => $chunkIndex,
-                    'suggestions' => $suggestions,
+                    'extracted_codes' => $extractedCodes,
                     'ai_chunks' => $aiChunks,
-                    'ai_suggestions' => $aiSuggestions,
+                    'ai_extracted_codes' => $aiExtractedCodes,
                 ],
             ])->save();
 
@@ -297,8 +297,7 @@ class ManualImportService
         int $pageNumber,
         ?string $sectionTitle,
         ?string $moduleKey,
-    ): int
-    {
+    ): int {
         $created = 0;
         $context = array_filter([
             'module' => $moduleKey,
@@ -358,7 +357,7 @@ class ManualImportService
                 ],
             ];
 
-            ManualExtractionCandidate::create($this->withReviewClassification($candidate));
+            $this->storeExtractedCandidate($candidate);
 
             $created++;
         }
@@ -437,7 +436,7 @@ class ManualImportService
                 ],
             ];
 
-            ManualExtractionCandidate::create($this->withReviewClassification($candidate));
+            $this->storeExtractedCandidate($candidate);
 
             $created++;
         }
@@ -507,7 +506,7 @@ class ManualImportService
                 ],
             ];
 
-            ManualExtractionCandidate::create($this->withReviewClassification($candidate));
+            $this->storeExtractedCandidate($candidate);
 
             $created++;
         }
@@ -522,6 +521,18 @@ class ManualImportService
     private function withReviewClassification(array $candidate): array
     {
         return array_merge($candidate, app(ManualExtractionCandidateReviewClassifier::class)->classify($candidate));
+    }
+
+    /**
+     * @param  array<string, mixed>  $candidate
+     */
+    private function storeExtractedCandidate(array $candidate): ManualExtractionCandidate
+    {
+        $storedCandidate = ManualExtractionCandidate::create($this->withReviewClassification($candidate));
+
+        app(ManualExtractionCandidatePublishingService::class)->publish($storedCandidate);
+
+        return $storedCandidate;
     }
 
     /**

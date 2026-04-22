@@ -26,6 +26,25 @@ services:
     networks:
       - app
 
+  frontend:
+    image: node:22-bookworm-slim
+    working_dir: /app
+    command: sh -lc "if [ ! -d node_modules/expo ]; then npm ci; fi; npm run web -- --lan"
+    environment:
+      BROWSER: none
+      EXPO_NO_TELEMETRY: "1"
+      EXPO_PUBLIC_API_URL: http://localhost:8090/api
+      WATCHPACK_POLLING: "true"
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./apps/mobile:/app
+      - mobile-node-modules:/app/node_modules
+    depends_on:
+      - nginx
+    networks:
+      - app
+
   worker:
     build:
       context: .
@@ -88,6 +107,7 @@ services:
 volumes:
   postgres-data:
   redis-data:
+  mobile-node-modules:
 
 networks:
   app:

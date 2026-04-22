@@ -4,8 +4,8 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\ProcessDiagnosisScreenshot;
-use App\Models\DiagnosticEntry;
 use App\Models\DiagnosisRequest;
+use App\Models\DiagnosticEntry;
 use App\Models\Machine;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -197,7 +197,7 @@ class DiagnosisController extends Controller
     {
         $baseQuery = DiagnosticEntry::query()
             ->where('machine_id', $diagnosis->machine_id)
-            ->where('status', 'approved')
+            ->where('status', 'active')
             ->whereIn('primary_code_normalized', $this->codeMatchVariants($normalizedCode));
 
         if ($moduleKey) {

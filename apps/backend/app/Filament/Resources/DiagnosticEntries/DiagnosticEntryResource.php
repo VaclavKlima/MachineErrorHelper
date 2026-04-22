@@ -22,11 +22,11 @@ class DiagnosticEntryResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
 
-    protected static ?string $navigationLabel = 'Diagnostic knowledge';
+    protected static ?string $navigationLabel = 'Error codes';
 
-    protected static ?string $modelLabel = 'diagnostic entry';
+    protected static ?string $modelLabel = 'error code';
 
-    protected static ?string $pluralModelLabel = 'diagnostic knowledge';
+    protected static ?string $pluralModelLabel = 'error codes';
 
     protected static string|\UnitEnum|null $navigationGroup = 'Content';
 

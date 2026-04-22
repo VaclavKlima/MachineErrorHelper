@@ -13,6 +13,12 @@ class DiagnosticEntryInfolist
         return $schema
             ->components([
                 TextEntry::make('status')
+                    ->label('State')
+                    ->formatStateUsing(fn (string $state): string => match ($state) {
+                        'active' => 'Active',
+                        'disabled' => 'Disabled',
+                        default => ucfirst($state),
+                    })
                     ->badge(),
                 TextEntry::make('machine.name'),
                 TextEntry::make('manual.title'),
@@ -33,7 +39,8 @@ class DiagnosticEntryInfolist
                     ->columnSpanFull(),
                 TextEntry::make('source_page_number'),
                 TextEntry::make('confidence'),
-                TextEntry::make('approved_at'),
+                TextEntry::make('approved_at')
+                    ->label('Imported at'),
             ]);
     }
 }

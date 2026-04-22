@@ -21,11 +21,13 @@ class ManualExtractionCandidateResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedClipboardDocumentCheck;
 
-    protected static ?string $navigationLabel = 'Review suggestions';
+    protected static bool $shouldRegisterNavigation = false;
 
-    protected static ?string $modelLabel = 'suggestion';
+    protected static ?string $navigationLabel = 'Extraction log';
 
-    protected static ?string $pluralModelLabel = 'review suggestions';
+    protected static ?string $modelLabel = 'extracted code';
+
+    protected static ?string $pluralModelLabel = 'extracted codes';
 
     protected static string|\UnitEnum|null $navigationGroup = 'Workflow';
 
@@ -48,13 +50,7 @@ class ManualExtractionCandidateResource extends Resource
 
     public static function getNavigationBadge(): ?string
     {
-        $count = ManualExtractionCandidate::query()
-            ->where('status', 'pending')
-            ->where('review_priority', 'high')
-            ->where('review_score', '>=', 0.78)
-            ->count();
-
-        return $count > 0 ? (string) $count : null;
+        return null;
     }
 
     public static function getPages(): array

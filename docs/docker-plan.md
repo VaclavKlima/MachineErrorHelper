@@ -13,6 +13,7 @@ postgres     PostgreSQL with pgvector
 redis        cache, queue, rate limit
 worker       Laravel queue worker
 scheduler    Laravel scheduler
+frontend     Expo web dev server for the user app
 node         Vite/Tailwind build for admin assets
 mailpit      local email testing
 minio        optional S3-compatible storage

@@ -18,13 +18,13 @@ class DiagnosticEntryForm
                     ->relationship('machine', 'name')
                     ->required(),
                 Select::make('status')
+                    ->label('State')
                     ->options([
-                        'approved' => 'Approved',
-                        'draft' => 'Draft',
-                        'archived' => 'Archived',
+                        'active' => 'Active',
+                        'disabled' => 'Disabled',
                     ])
                     ->required()
-                    ->default('approved'),
+                    ->default('active'),
                 TextInput::make('module_key')
                     ->label('Module / context key')
                     ->maxLength(255),

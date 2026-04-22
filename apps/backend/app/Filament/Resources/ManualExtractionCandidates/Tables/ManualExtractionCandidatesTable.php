@@ -2,19 +2,12 @@
 
 namespace App\Filament\Resources\ManualExtractionCandidates\Tables;
 
-use App\Models\ManualExtractionCandidate;
-use App\Services\ManualExtractionCandidateApprovalService;
-use App\Services\ManualExtractionCandidateAutoApprovalService;
-use Filament\Actions\Action;
-use Filament\Actions\BulkAction;
 use Filament\Actions\EditAction;
 use Filament\Actions\ViewAction;
-use Filament\Notifications\Notification;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\Filter;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
-use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Builder;
 
 class ManualExtractionCandidatesTable
@@ -27,7 +20,7 @@ class ManualExtractionCandidatesTable
                 TextColumn::make('status')
                     ->badge()
                     ->color(fn (string $state): string => match ($state) {
-                        'approved' => 'success',
+                        'published' => 'success',
                         'rejected' => 'danger',
                         'ignored' => 'gray',
                         default => 'warning',
@@ -71,20 +64,19 @@ class ManualExtractionCandidatesTable
             ])
             ->filters([
                 Filter::make('high_confidence_queue')
-                    ->label('High-confidence queue')
-                    ->default()
+                    ->label('High-confidence extracted codes')
                     ->query(fn (Builder $query): Builder => $query
-                        ->where('status', 'pending')
+                        ->where('status', 'published')
                         ->where('review_priority', 'high')
                         ->where('review_score', '>=', 0.78)),
                 SelectFilter::make('status')
                     ->options([
-                        'pending' => 'Pending review',
-                        'approved' => 'Approved',
+                        'pending' => 'Pending import',
+                        'published' => 'Published',
                         'rejected' => 'Rejected',
                         'ignored' => 'Ignored',
                     ])
-                    ->default('pending'),
+                    ->default('published'),
                 SelectFilter::make('review_priority')
                     ->label('Priority')
                     ->options([
@@ -103,99 +95,9 @@ class ManualExtractionCandidatesTable
                     ->relationship('manual', 'title')
                     ->label('Manual'),
             ])
-            ->headerActions([
-                Action::make('autoApproveHighConfidence')
-                    ->label('Approve high-confidence')
-                    ->color('success')
-                    ->requiresConfirmation()
-                    ->modalHeading('Approve high-confidence suggestions?')
-                    ->modalDescription(fn (ManualExtractionCandidateAutoApprovalService $service): string => sprintf(
-                        'This will approve %d pending high-confidence suggestions across all manuals and publish them to Diagnostic knowledge.',
-                        $service->countForManual(),
-                    ))
-                    ->visible(fn (ManualExtractionCandidateAutoApprovalService $service): bool => $service->countForManual() > 0)
-                    ->action(function (ManualExtractionCandidateAutoApprovalService $service): void {
-                        $approved = $service->approveForManual(null, auth()->user());
-
-                        Notification::make()
-                            ->success()
-                            ->title('Diagnostic knowledge updated')
-                            ->body("Approved {$approved} high-confidence suggestions.")
-                            ->send();
-                    }),
-            ])
             ->recordActions([
                 ViewAction::make(),
                 EditAction::make(),
-                Action::make('approve')
-                    ->label('Approve')
-                    ->color('success')
-                    ->requiresConfirmation()
-                    ->visible(fn (ManualExtractionCandidate $record): bool => $record->status !== 'approved')
-                    ->action(function (ManualExtractionCandidate $record, ManualExtractionCandidateApprovalService $service): void {
-                        $service->approve($record, auth()->user());
-
-                        Notification::make()
-                            ->success()
-                            ->title('Suggestion approved')
-                            ->body('The diagnostic entry is now available to the diagnosis flow.')
-                            ->send();
-                    }),
-                Action::make('reject')
-                    ->label('Reject')
-                    ->color('danger')
-                    ->requiresConfirmation()
-                    ->visible(fn (ManualExtractionCandidate $record): bool => $record->status !== 'rejected')
-                    ->action(function (ManualExtractionCandidate $record, ManualExtractionCandidateApprovalService $service): void {
-                        $service->reject($record, auth()->user());
-
-                        Notification::make()
-                            ->success()
-                            ->title('Suggestion rejected')
-                            ->send();
-                    }),
-                Action::make('ignore')
-                    ->label('Ignore')
-                    ->color('gray')
-                    ->requiresConfirmation()
-                    ->visible(fn (ManualExtractionCandidate $record): bool => $record->status !== 'ignored')
-                    ->action(function (ManualExtractionCandidate $record): void {
-                        $record->forceFill([
-                            'status' => 'ignored',
-                            'noise_reason' => $record->noise_reason ?: 'manual_ignore',
-                            'reviewed_by' => auth()->id(),
-                            'reviewed_at' => now(),
-                        ])->save();
-
-                        Notification::make()
-                            ->success()
-                            ->title('Suggestion ignored')
-                            ->send();
-                    }),
-            ])
-            ->toolbarActions([
-                BulkAction::make('approveSelected')
-                    ->label('Approve selected')
-                    ->color('success')
-                    ->requiresConfirmation()
-                    ->action(function (Collection $records, ManualExtractionCandidateApprovalService $service): void {
-                        $approved = 0;
-
-                        foreach ($records as $record) {
-                            if ($record->status === 'approved') {
-                                continue;
-                            }
-
-                            $service->approve($record, auth()->user());
-                            $approved++;
-                        }
-
-                        Notification::make()
-                            ->success()
-                            ->title('Selected suggestions approved')
-                            ->body("Approved {$approved} suggestions.")
-                            ->send();
-                    }),
             ]);
     }
 }

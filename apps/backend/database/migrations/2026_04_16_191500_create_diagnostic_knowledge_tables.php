@@ -49,11 +49,12 @@ return new class extends Migration
                 $table->unsignedInteger('source_page_number')->nullable();
                 $table->string('extractor')->nullable();
                 $table->decimal('confidence', 5, 4)->nullable();
-                $table->string('status')->default('approved');
+                $table->string('status')->default('active');
                 $table->foreignId('approved_by')->nullable()->constrained('users')->nullOnDelete();
                 $table->timestamp('approved_at')->nullable();
                 $table->json('metadata')->nullable();
                 $table->timestamps();
+                $table->softDeletes();
 
                 $table->index(['machine_id', 'module_key', 'primary_code_normalized']);
                 $table->index(['manual_id', 'source_page_number']);

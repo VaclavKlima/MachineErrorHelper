@@ -45,12 +45,12 @@ Artisan::command('manuals:import {path : PDF path, relative to repo root or back
     );
 
     $manual->loadCount(['pages', 'chunks']);
-    $suggestionCount = $manual->extractionCandidates()->where('status', 'pending')->count();
+    $publishedCodeCount = $manual->diagnosticEntries()->where('status', 'active')->count();
 
     $this->info("Imported manual #{$manual->id}: {$manual->title}");
     $this->line("Pages: {$manual->pages_count}");
     $this->line("Chunks: {$manual->chunks_count}");
-    $this->line("Suggestions pending review: {$suggestionCount}");
+    $this->line("Active codes: {$publishedCodeCount}");
 
     return 0;
-})->purpose('Import a local PDF manual, extract text pages/chunks, and create candidate error-code definitions');
+})->purpose('Import a local PDF manual, extract text pages/chunks, and publish active error-code definitions');

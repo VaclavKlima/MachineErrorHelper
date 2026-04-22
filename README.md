@@ -52,11 +52,11 @@ Still placeholder:
 
 ## Quick Start
 
-Build and start the backend stack:
+Build and start the full local stack:
 
 ```bash
 sudo docker compose build backend
-sudo docker compose up -d postgres redis backend nginx worker scheduler mailpit
+sudo docker compose up -d
 sudo docker compose exec backend php artisan migrate
 sudo docker compose exec backend php artisan make:filament-user
 ```
@@ -65,6 +65,7 @@ Useful local URLs:
 
 - Admin: http://localhost:8090/admin
 - API: http://localhost:8090/api/machines
+- Frontend web app: http://localhost:8081
 - Mailpit: http://localhost:8025
 
 ## Manual Import
@@ -79,7 +80,7 @@ sudo docker compose exec backend php artisan manuals:import "assets/manuals/erro
 
 The importer currently uses Poppler `pdftotext` and deterministic table-row detection. Extraction output goes into `Review suggestions`; approved error codes are created only when an admin reviews and approves a suggestion.
 
-Run the user frontend as a webpage:
+The user frontend is included in `docker compose up`. To run it directly on the host instead:
 
 ```bash
 cd apps/mobile
