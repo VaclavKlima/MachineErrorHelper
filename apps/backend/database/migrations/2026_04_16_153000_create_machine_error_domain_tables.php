@@ -149,21 +149,6 @@ return new class extends Migration
             $table->index(['error_code_id', 'approval_status']);
         });
 
-        Schema::create('repair_hints', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('machine_id')->constrained()->cascadeOnDelete();
-            $table->foreignId('error_code_id')->nullable()->constrained()->cascadeOnDelete();
-            $table->foreignId('error_code_definition_id')->nullable()->constrained()->cascadeOnDelete();
-            $table->string('title');
-            $table->longText('body')->nullable();
-            $table->json('steps')->nullable();
-            $table->text('safety_warning')->nullable();
-            $table->json('tools_required')->nullable();
-            $table->boolean('is_published')->default(false);
-            $table->unsignedInteger('sort_order')->default(100);
-            $table->timestamps();
-        });
-
         Schema::create('diagnosis_requests', function (Blueprint $table) {
             $table->id();
             $table->ulid('public_id')->unique();
@@ -200,7 +185,6 @@ return new class extends Migration
     {
         Schema::dropIfExists('diagnosis_candidates');
         Schema::dropIfExists('diagnosis_requests');
-        Schema::dropIfExists('repair_hints');
         Schema::dropIfExists('error_code_definitions');
         Schema::dropIfExists('error_codes');
         Schema::dropIfExists('manual_chunks');

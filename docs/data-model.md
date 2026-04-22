@@ -193,23 +193,6 @@ Versioned meaning of a code.
 - `approved_by`
 - `approved_at`
 
-### repair_hints
-
-Admin-authored guidance. This is separate from manual data so local expertise can override or extend manuals without losing source traceability.
-
-- `id`
-- `machine_id`
-- `error_code_id` nullable
-- `error_code_definition_id` nullable
-- `title`
-- `body`
-- `steps` JSON
-- `safety_warning`
-- `tools_required` JSON
-- `media` attachments through media library
-- `is_published`
-- `sort_order`
-
 ## Diagnosis Tables
 
 ### diagnosis_requests
@@ -275,4 +258,4 @@ For a user on software 1.2:
 
 - `E1042` should use the Manual B definition.
 - Unchanged codes should still use Manual A definitions.
-- Manual C can provide extra searchable context or repair hints but should not automatically replace the authoritative definition.
+- Manual C can provide extra searchable context or recommended actions but should not automatically replace the authoritative definition.

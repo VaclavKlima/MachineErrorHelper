@@ -9,11 +9,37 @@ use App\Models\DiagnosticEntry;
 use App\Models\Machine;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class DiagnosisController extends Controller
 {
+    public function history(Request $request): JsonResponse
+    {
+        $diagnoses = DiagnosisRequest::query()
+            ->where('user_id', $request->user()->id)
+            ->with([
+                'machine:id,name,slug,manufacturer,model_number',
+                'selectedDiagnosticEntry:id,machine_id,module_key,primary_code,title',
+            ])
+            ->latest()
+            ->limit(20)
+            ->get();
+
+        return response()->json([
+            'data' => $diagnoses->map(fn (DiagnosisRequest $diagnosis): array => [
+                'id' => $diagnosis->public_id,
+                'status' => $diagnosis->status,
+                'created_at' => $diagnosis->created_at?->toJSON(),
+                'confidence' => $diagnosis->confidence,
+                'machine' => $diagnosis->machine,
+                'selected_diagnostic_entry' => $diagnosis->selectedDiagnosticEntry,
+                'ai_detected_codes' => $diagnosis->ai_detected_codes ?? [],
+                'user_entered_codes' => $diagnosis->user_entered_codes ?? [],
+                'screenshot_url' => $diagnosis->screenshot_url,
+            ])->values()->all(),
+        ]);
+    }
+
     public function store(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -30,9 +56,12 @@ class DiagnosisController extends Controller
 
         $diagnosis = DiagnosisRequest::query()->create([
             'machine_id' => $machine->id,
+            'user_id' => $request->user()?->id,
             'software_version_id' => $data['software_version_id'] ?? null,
             'screenshot_path' => $path,
             'status' => 'uploaded',
+            'ai_detected_codes' => [],
+            'user_entered_codes' => [],
         ]);
 
         ProcessDiagnosisScreenshot::dispatch($diagnosis->id);
@@ -49,8 +78,8 @@ class DiagnosisController extends Controller
         $diagnosis->load([
             'machine:id,name,slug,manufacturer,model_number',
             'softwareVersion:id,version',
-            'selectedDiagnosticEntry',
-            'candidates.matchedDiagnosticEntry',
+            'selectedDiagnosticEntry.codeDocumentations',
+            'candidates.matchedDiagnosticEntry.codeDocumentations',
         ]);
 
         return response()->json([
@@ -63,9 +92,7 @@ class DiagnosisController extends Controller
                 'candidates' => $diagnosis->candidates,
                 'selected_diagnostic_entry' => $diagnosis->selectedDiagnosticEntry,
                 'result' => $diagnosis->result_payload,
-                'screenshot_url' => $diagnosis->screenshot_path
-                    ? Storage::url($diagnosis->screenshot_path)
-                    : null,
+                'screenshot_url' => $diagnosis->screenshot_url,
             ],
         ]);
     }
@@ -140,6 +167,7 @@ class DiagnosisController extends Controller
         $diagnosis->update([
             'selected_diagnostic_entry_id' => $singleResolvedCode?->matched_diagnostic_entry_id,
             'status' => $singleResolvedCode ? 'resolved' : 'needs_confirmation',
+            'user_entered_codes' => $codes,
             'confidence' => count($candidateConfidences) > 0
                 ? round(array_sum($candidateConfidences) / count($candidateConfidences), 4)
                 : null,

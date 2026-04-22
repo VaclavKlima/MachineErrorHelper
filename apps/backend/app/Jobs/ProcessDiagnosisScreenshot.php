@@ -44,6 +44,10 @@ class ProcessDiagnosisScreenshot implements ShouldQueue
                 default => 'needs_confirmation',
             },
             'raw_ocr_text' => $extraction['raw_text'],
+            'ai_detected_codes' => array_values(array_unique(array_map(
+                static fn (array $error): string => (string) ($error['code'] ?? ''),
+                $extraction['errors'] ?? [],
+            ))),
             'confidence' => collect($extraction['errors'] ?? [])->pluck('confidence')->filter()->avg(),
             'selected_diagnostic_entry_id' => $singleResolvedCandidate?->matched_diagnostic_entry_id,
             'result_payload' => [
@@ -66,6 +70,7 @@ class ProcessDiagnosisScreenshot implements ShouldQueue
             ->whereKey($this->diagnosisRequestId)
             ->update([
                 'status' => 'failed',
+                'ai_detected_codes' => [],
                 'result_payload' => [
                     'message' => 'Screenshot extraction failed.',
                     'error' => $throwable->getMessage(),

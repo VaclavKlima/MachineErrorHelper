@@ -36,8 +36,4 @@ class ErrorCode extends Model
         return $this->hasMany(ErrorCodeDefinition::class);
     }
 
-    public function repairHints(): HasMany
-    {
-        return $this->hasMany(RepairHint::class);
-    }
 }

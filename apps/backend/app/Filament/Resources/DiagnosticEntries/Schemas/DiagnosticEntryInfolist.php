@@ -35,6 +35,10 @@ class DiagnosticEntryInfolist
                     ->columnSpanFull(),
                 TextEntry::make('recommended_action')
                     ->columnSpanFull(),
+                TextEntry::make('codeDocumentations.title')
+                    ->label('Documentation')
+                    ->listWithLineBreaks()
+                    ->columnSpanFull(),
                 TextEntry::make('source_text')
                     ->columnSpanFull(),
                 TextEntry::make('source_page_number'),

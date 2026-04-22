@@ -1,15 +1,15 @@
 <?php
 
-namespace App\Filament\Resources\RepairHints\Pages;
+namespace App\Filament\Resources\CodeDocumentations\Pages;
 
-use App\Filament\Resources\RepairHints\RepairHintResource;
+use App\Filament\Resources\CodeDocumentations\CodeDocumentationResource;
 use Filament\Actions\DeleteAction;
 use Filament\Actions\ViewAction;
 use Filament\Resources\Pages\EditRecord;
 
-class EditRepairHint extends EditRecord
+class EditCodeDocumentation extends EditRecord
 {
-    protected static string $resource = RepairHintResource::class;
+    protected static string $resource = CodeDocumentationResource::class;
 
     protected function getHeaderActions(): array
     {

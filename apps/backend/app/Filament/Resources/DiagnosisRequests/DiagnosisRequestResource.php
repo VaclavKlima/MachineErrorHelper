@@ -22,7 +22,25 @@ class DiagnosisRequestResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedRectangleStack;
 
-    protected static bool $shouldRegisterNavigation = false;
+    protected static ?string $navigationLabel = 'Scan history';
+
+    protected static ?string $modelLabel = 'scan';
+
+    protected static ?string $pluralModelLabel = 'scan history';
+
+    protected static string|\UnitEnum|null $navigationGroup = 'Operations';
+
+    protected static ?int $navigationSort = 20;
+
+    public static function canCreate(): bool
+    {
+        return false;
+    }
+
+    public static function canEdit(\Illuminate\Database\Eloquent\Model $record): bool
+    {
+        return false;
+    }
 
     public static function form(Schema $schema): Schema
     {
@@ -50,9 +68,7 @@ class DiagnosisRequestResource extends Resource
     {
         return [
             'index' => ListDiagnosisRequests::route('/'),
-            'create' => CreateDiagnosisRequest::route('/create'),
             'view' => ViewDiagnosisRequest::route('/{record}'),
-            'edit' => EditDiagnosisRequest::route('/{record}/edit'),
         ];
     }
 }

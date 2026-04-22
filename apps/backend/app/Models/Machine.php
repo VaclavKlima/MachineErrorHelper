@@ -68,8 +68,4 @@ class Machine extends Model
         return $this->hasMany(ManualExtractionCandidate::class);
     }
 
-    public function repairHints(): HasMany
-    {
-        return $this->hasMany(RepairHint::class);
-    }
 }

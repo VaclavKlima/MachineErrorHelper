@@ -60,7 +60,7 @@ Success criteria:
 
 - User can upload screenshot.
 - System finds exact approved code if OCR sees it.
-- User receives meaning and repair hint.
+- User receives meaning and recommended action.
 
 ## Phase 5: Gemini Integration
 
@@ -117,7 +117,6 @@ For the first usable MVP, build:
 - manual upload
 - manual text extraction
 - manually approved error-code definitions
-- repair hints
 - user machine selection
 - screenshot upload
 - OCR + regex exact match

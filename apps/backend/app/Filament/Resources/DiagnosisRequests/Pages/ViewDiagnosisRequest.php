@@ -3,7 +3,6 @@
 namespace App\Filament\Resources\DiagnosisRequests\Pages;
 
 use App\Filament\Resources\DiagnosisRequests\DiagnosisRequestResource;
-use Filament\Actions\EditAction;
 use Filament\Resources\Pages\ViewRecord;
 
 class ViewDiagnosisRequest extends ViewRecord
@@ -12,8 +11,6 @@ class ViewDiagnosisRequest extends ViewRecord
 
     protected function getHeaderActions(): array
     {
-        return [
-            EditAction::make(),
-        ];
+        return [];
     }
 }

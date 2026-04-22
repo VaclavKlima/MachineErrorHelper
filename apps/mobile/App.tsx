@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider, useMutation, useQuery } from '@tansta
 import * as ImagePicker from 'expo-image-picker';
 import { StatusBar } from 'expo-status-bar';
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -274,6 +275,14 @@ const diagnosisCreateSchema = z.object({
   poll_url: z.string(),
 });
 
+const codeDocumentationSchema = z
+  .object({
+    id: z.number(),
+    title: z.string(),
+    content: z.unknown().nullable(),
+  })
+  .passthrough();
+
 const diagnosticEntrySchema = z
   .object({
     id: z.number(),
@@ -286,6 +295,7 @@ const diagnosticEntrySchema = z
     severity: z.string().nullable(),
     source_page_number: z.number().nullable(),
     confidence: z.number().nullable(),
+    code_documentations: z.array(codeDocumentationSchema).optional().default([]),
   })
   .passthrough();
 
@@ -316,11 +326,31 @@ const diagnosisDetailSchema = z.object({
     .passthrough(),
 });
 
+const diagnosisHistoryItemSchema = z
+  .object({
+    id: z.string(),
+    status: z.string(),
+    created_at: z.string().nullable(),
+    confidence: z.number().nullable(),
+    machine: machineSchema.nullable(),
+    selected_diagnostic_entry: diagnosticEntrySchema.nullable(),
+    ai_detected_codes: z.array(z.string()),
+    user_entered_codes: z.array(z.string()),
+    screenshot_url: z.string().nullable(),
+  })
+  .passthrough();
+
+const diagnosisHistoryResponseSchema = z.object({
+  data: z.array(diagnosisHistoryItemSchema),
+});
+
 type Machine = z.infer<typeof machineSchema>;
 type DiagnosisCreate = z.infer<typeof diagnosisCreateSchema>;
 type DiagnosisDetail = z.infer<typeof diagnosisDetailSchema>['data'];
+type DiagnosisHistoryItem = z.infer<typeof diagnosisHistoryItemSchema>;
 type DiagnosisCandidate = z.infer<typeof diagnosisCandidateSchema>;
 type DiagnosticEntry = z.infer<typeof diagnosticEntrySchema>;
+type CodeDocumentation = z.infer<typeof codeDocumentationSchema>;
 type AuthUser = z.infer<typeof authUserSchema>;
 type ImageSource = 'camera' | 'library';
 type ScreenshotPreviewSource = {
@@ -328,7 +358,7 @@ type ScreenshotPreviewSource = {
   uri: string;
   width?: number | null;
 };
-type AppPage = 'dashboard' | 'machines' | 'diagnosis';
+type AppPage = 'dashboard' | 'machines' | 'diagnosis' | 'history' | 'history-detail';
 type DiagnosisStep = 'upload' | 'confirm' | 'result';
 type ImageQualityStatus = 'pass' | 'warn' | 'fail';
 type ImageQuality = {
@@ -513,6 +543,15 @@ async function fetchDiagnosis(id: string, token: string): Promise<DiagnosisDetai
     headers: authHeaders(token),
   });
   const payload = await parseJsonResponse(response, diagnosisDetailSchema, 'Could not load diagnosis.');
+
+  return payload.data;
+}
+
+async function fetchDiagnosisHistory(token: string): Promise<DiagnosisHistoryItem[]> {
+  const response = await fetch(`${apiBaseUrl}/diagnoses/history`, {
+    headers: authHeaders(token),
+  });
+  const payload = await parseJsonResponse(response, diagnosisHistoryResponseSchema, 'Could not load scan history.');
 
   return payload.data;
 }
@@ -1092,6 +1131,295 @@ function statusLabel(status: string | undefined): string {
   }
 }
 
+function formatHistoryTimestamp(value: string | null): string {
+  if (!value) {
+    return 'Unknown time';
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+function historyCodesLabel(item: DiagnosisHistoryItem): string {
+  const codes = item.user_entered_codes.length > 0 ? item.user_entered_codes : item.ai_detected_codes;
+
+  if (codes.length > 0) {
+    return codes.join(' ');
+  }
+
+  return item.selected_diagnostic_entry?.primary_code ?? 'No code captured';
+}
+
+function historyMatchLabel(item: DiagnosisHistoryItem): string | null {
+  const entry = item.selected_diagnostic_entry;
+
+  if (!entry) {
+    return null;
+  }
+
+  return [entry.module_key, entry.primary_code, entry.title].filter(Boolean).join(' · ') || null;
+}
+
+type DocumentationNode = {
+  attrs?: Record<string, unknown>;
+  content?: DocumentationNode[];
+  marks?: Array<{ attrs?: Record<string, unknown>; type?: string }>;
+  text?: string;
+  type?: string;
+};
+
+function getEntryDocumentations(entry: DiagnosticEntry | null): CodeDocumentation[] {
+  return entry?.code_documentations ?? [];
+}
+
+function extractDocumentationNodes(content: unknown): DocumentationNode[] {
+  if (!content || typeof content !== 'object') {
+    return [];
+  }
+
+  const node = content as DocumentationNode;
+
+  if (node.type === 'doc' && Array.isArray(node.content)) {
+    return node.content;
+  }
+
+  return Array.isArray(node.content) ? node.content : [node];
+}
+
+function normalizeDocumentationUrl(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() !== '' ? resolveAssetUrl(value) : null;
+}
+
+function plainTextFromDocumentationNodes(nodes: DocumentationNode[] | undefined): string {
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    return '';
+  }
+
+  return nodes
+    .map((node) => {
+      if (typeof node.text === 'string') {
+        return node.text;
+      }
+
+      return plainTextFromDocumentationNodes(node.content);
+    })
+    .join('');
+}
+
+function documentationTextStyle(node: DocumentationNode, baseStyle: object): object[] {
+  const stylesForNode: object[] = [baseStyle];
+
+  for (const mark of node.marks ?? []) {
+    switch (mark.type) {
+      case 'bold':
+        stylesForNode.push(styles.documentationBoldText);
+        break;
+      case 'italic':
+        stylesForNode.push(styles.documentationItalicText);
+        break;
+      case 'underline':
+        stylesForNode.push(styles.documentationUnderlineText);
+        break;
+      case 'strike':
+        stylesForNode.push(styles.documentationStrikeText);
+        break;
+      case 'code':
+        stylesForNode.push(styles.documentationInlineCodeText);
+        break;
+      case 'link':
+        stylesForNode.push(styles.documentationLinkText);
+        break;
+      default:
+        break;
+    }
+  }
+
+  return stylesForNode;
+}
+
+function renderDocumentationInline(node: DocumentationNode, key: string, baseStyle: object): ReactNode {
+  if (node.type === 'hardBreak') {
+    return <Text key={key}>{'\n'}</Text>;
+  }
+
+  if (node.type === 'image') {
+    const source = normalizeDocumentationUrl(node.attrs?.src ?? node.attrs?.url);
+
+    if (!source) {
+      return null;
+    }
+
+    return <RNImage key={key} source={{ uri: source }} style={styles.documentationInlineImage} resizeMode="contain" />;
+  }
+
+  if (typeof node.text === 'string') {
+    return (
+      <Text key={key} style={documentationTextStyle(node, baseStyle)}>
+        {node.text}
+      </Text>
+    );
+  }
+
+  const children = Array.isArray(node.content)
+    ? node.content.map((child, index) => renderDocumentationInline(child, `${key}-${index}`, baseStyle))
+    : null;
+
+  return (
+    <Text key={key} style={documentationTextStyle(node, baseStyle)}>
+      {children}
+    </Text>
+  );
+}
+
+function renderDocumentationBlock(node: DocumentationNode, key: string): ReactNode {
+  const children = Array.isArray(node.content) ? node.content : [];
+  const level = typeof node.attrs?.level === 'number' ? node.attrs.level : 2;
+
+  switch (node.type) {
+    case 'heading':
+      return (
+        <Text key={key} style={[styles.documentationHeading, level <= 2 ? styles.documentationHeadingLarge : styles.documentationHeadingSmall]}>
+          {children.map((child, index) => renderDocumentationInline(child, `${key}-${index}`, styles.documentationHeadingText))}
+        </Text>
+      );
+    case 'paragraph':
+      if (children.length === 0) {
+        return null;
+      }
+
+      if (children.some((child) => child.type === 'image')) {
+        return (
+          <View key={key} style={styles.documentationParagraphMedia}>
+            {children.map((child, index) =>
+              child.type === 'image' ? (
+                renderDocumentationBlock(child, `${key}-${index}`)
+              ) : (
+                <Text key={`${key}-${index}`} style={styles.documentationParagraph}>
+                  {renderDocumentationInline(child, `${key}-${index}-inline`, styles.documentationParagraphText)}
+                </Text>
+              ),
+            )}
+          </View>
+        );
+      }
+
+      return (
+        <Text key={key} style={styles.documentationParagraph}>
+          {children.map((child, index) => renderDocumentationInline(child, `${key}-${index}`, styles.documentationParagraphText))}
+        </Text>
+      );
+    case 'bulletList':
+      return (
+        <View key={key} style={styles.documentationList}>
+          {children.map((child, index) => (
+            <View key={`${key}-${index}`} style={styles.documentationListItemRow}>
+              <Text style={styles.documentationBullet}>•</Text>
+              <View style={styles.documentationListItemBody}>
+                {Array.isArray(child.content)
+                  ? child.content.map((grandChild, grandChildIndex) => renderDocumentationBlock(grandChild, `${key}-${index}-${grandChildIndex}`))
+                  : null}
+              </View>
+            </View>
+          ))}
+        </View>
+      );
+    case 'orderedList':
+      return (
+        <View key={key} style={styles.documentationList}>
+          {children.map((child, index) => (
+            <View key={`${key}-${index}`} style={styles.documentationListItemRow}>
+              <Text style={styles.documentationBullet}>{index + 1}.</Text>
+              <View style={styles.documentationListItemBody}>
+                {Array.isArray(child.content)
+                  ? child.content.map((grandChild, grandChildIndex) => renderDocumentationBlock(grandChild, `${key}-${index}-${grandChildIndex}`))
+                  : null}
+              </View>
+            </View>
+          ))}
+        </View>
+      );
+    case 'blockquote':
+      return (
+        <View key={key} style={styles.documentationQuote}>
+          {children.map((child, index) => renderDocumentationBlock(child, `${key}-${index}`))}
+        </View>
+      );
+    case 'codeBlock': {
+      const codeText = plainTextFromDocumentationNodes(children);
+
+      if (codeText === '') {
+        return null;
+      }
+
+      return (
+        <View key={key} style={styles.documentationCodeBlock}>
+          <Text style={styles.documentationCodeBlockText}>{codeText}</Text>
+        </View>
+      );
+    }
+    case 'image': {
+      const source = normalizeDocumentationUrl(node.attrs?.src ?? node.attrs?.url);
+
+      if (!source) {
+        return null;
+      }
+
+      return <RNImage key={key} source={{ uri: source }} style={styles.documentationImage} resizeMode="contain" />;
+    }
+    case 'table':
+      return (
+        <View key={key} style={styles.documentationTable}>
+          {children.map((row, rowIndex) => (
+            <View key={`${key}-${rowIndex}`} style={styles.documentationTableRow}>
+              {(row.content ?? []).map((cell, cellIndex) => (
+                <View
+                  key={`${key}-${rowIndex}-${cellIndex}`}
+                  style={[
+                    styles.documentationTableCell,
+                    cell.type === 'tableHeader' && styles.documentationTableHeaderCell,
+                  ]}
+                >
+                  {(cell.content ?? []).map((cellChild, childIndex) => renderDocumentationBlock(cellChild, `${key}-${rowIndex}-${cellIndex}-${childIndex}`))}
+                </View>
+              ))}
+            </View>
+          ))}
+        </View>
+      );
+    case 'horizontalRule':
+      return <View key={key} style={styles.documentationDivider} />;
+    default:
+      if (children.length === 0 && typeof node.text === 'string') {
+        return (
+          <Text key={key} style={styles.documentationParagraph}>
+            {node.text}
+          </Text>
+        );
+      }
+
+      return (
+        <View key={key} style={styles.documentationFallbackBlock}>
+          {children.map((child, index) => renderDocumentationBlock(child, `${key}-${index}`))}
+        </View>
+      );
+  }
+}
+
+function DocumentationContent({ documentation }: { documentation: CodeDocumentation }) {
+  const nodes = extractDocumentationNodes(documentation.content);
+
+  if (nodes.length === 0) {
+    return <Text style={styles.modalMessageText}>No documentation body is available.</Text>;
+  }
+
+  return <View style={styles.documentationContent}>{nodes.map((node, index) => renderDocumentationBlock(node, `${documentation.id}-${index}`))}</View>;
+}
+
 function resultString(detail: DiagnosisDetail | null, key: string): string {
   const value = detail?.result?.[key];
 
@@ -1194,6 +1522,11 @@ function ResultPanel({ detail }: { detail: DiagnosisDetail | null }) {
   const entry = detail?.selected_diagnostic_entry ?? null;
   const candidates = detail?.candidates ?? [];
   const message = typeof detail?.result?.message === 'string' ? detail.result.message : null;
+  const [documentationModal, setDocumentationModal] = useState<{ code: string; documentations: CodeDocumentation[] } | null>(null);
+
+  useEffect(() => {
+    setDocumentationModal(null);
+  }, [detail?.id]);
 
   if (!detail) {
     return (
@@ -1220,24 +1553,110 @@ function ResultPanel({ detail }: { detail: DiagnosisDetail | null }) {
         {message ? <Text style={styles.helperText}>{message}</Text> : null}
 
         {entry ? (
-          <ErrorPreviewCard candidate={null} entry={entry} />
+          <ErrorPreviewCard candidate={null} entry={entry} onOpenDocumentation={setDocumentationModal} />
         ) : candidates.length ? (
           <View style={styles.matchList}>
             {candidates.map((candidate) => (
-              <ErrorPreviewCard key={candidate.id} candidate={candidate} entry={candidate.matched_diagnostic_entry ?? null} />
+              <ErrorPreviewCard
+                key={candidate.id}
+                candidate={candidate}
+                entry={candidate.matched_diagnostic_entry ?? null}
+                onOpenDocumentation={setDocumentationModal}
+              />
             ))}
           </View>
         ) : (
           <Text style={styles.helperText}>No visible code was confirmed yet.</Text>
         )}
       </View>
+
+      <DocumentationModal modal={documentationModal} onClose={() => setDocumentationModal(null)} />
     </View>
   );
 }
 
-function ErrorPreviewCard({ candidate, entry }: { candidate: DiagnosisCandidate | null; entry: DiagnosticEntry | null }) {
+function HistoryOverviewPanel({
+  detail,
+  item,
+}: {
+  detail: DiagnosisDetail | null;
+  item: DiagnosisHistoryItem | null;
+}) {
+  const summaryCodes = item ? historyCodesLabel(item) : '';
+  const matchedLabel = item ? historyMatchLabel(item) : null;
+  const machineLabel = item?.machine ? [item.machine.name, item.machine.manufacturer, item.machine.model_number].filter(Boolean).join(' · ') : null;
+  const screenshotSource = detail?.screenshot_url
+    ? {
+        uri: resolveAssetUrl(detail.screenshot_url),
+      }
+    : item?.screenshot_url
+      ? {
+          uri: resolveAssetUrl(item.screenshot_url),
+        }
+      : null;
+
+  if (!detail && !item) {
+    return (
+      <View style={styles.resultPanel}>
+        <View style={styles.resultBody}>
+          <Text style={styles.resultTitle}>Scan not found</Text>
+          <Text style={styles.helperText}>Choose a scan from the history list.</Text>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.scanOverviewStack}>
+      <View style={styles.scanOverviewMetaCard}>
+        <View style={styles.scanOverviewMetaRow}>
+          <View style={styles.scanOverviewMetaBlock}>
+            <Text style={styles.detectedLabel}>Machine</Text>
+            <Text style={styles.scanOverviewMetaValue}>{machineLabel ?? 'Unknown machine'}</Text>
+          </View>
+          <View style={styles.scanOverviewMetaBlock}>
+            <Text style={styles.detectedLabel}>Scanned</Text>
+            <Text style={styles.scanOverviewMetaValue}>{formatHistoryTimestamp(item?.created_at ?? null)}</Text>
+          </View>
+        </View>
+
+        <View style={styles.scanOverviewMetaRow}>
+          <View style={styles.scanOverviewMetaBlock}>
+            <Text style={styles.detectedLabel}>Captured codes</Text>
+            <Text style={styles.scanOverviewCodeValue}>{summaryCodes || 'No code captured'}</Text>
+          </View>
+          <View style={styles.scanOverviewMetaBlock}>
+            <Text style={styles.detectedLabel}>Status</Text>
+            <Text style={styles.scanOverviewMetaValue}>{statusLabel(detail?.status ?? item?.status)}</Text>
+          </View>
+        </View>
+
+        {matchedLabel ? (
+          <View style={styles.scanOverviewMatchedBox}>
+            <Text style={styles.detectedLabel}>Matched entry</Text>
+            <Text style={styles.scanOverviewMatchedText}>{matchedLabel}</Text>
+          </View>
+        ) : null}
+      </View>
+
+      {screenshotSource ? <ScreenshotViewer source={screenshotSource} /> : null}
+      <ResultPanel detail={detail} />
+    </View>
+  );
+}
+
+function ErrorPreviewCard({
+  candidate,
+  entry,
+  onOpenDocumentation,
+}: {
+  candidate: DiagnosisCandidate | null;
+  entry: DiagnosticEntry | null;
+  onOpenDocumentation: (value: { code: string; documentations: CodeDocumentation[] } | null) => void;
+}) {
   const code = entry?.primary_code ?? candidate?.candidate_code ?? candidate?.normalized_code ?? 'Code';
   const module = entry?.module_key ?? (typeof candidate?.metadata?.module_key === 'string' ? candidate.metadata.module_key : 'Not matched');
+  const documentations = getEntryDocumentations(entry);
 
   return (
     <View style={styles.matchCard}>
@@ -1246,7 +1665,20 @@ function ErrorPreviewCard({ candidate, entry }: { candidate: DiagnosisCandidate 
           <Text style={styles.matchCode}>{code}</Text>
           <Text style={styles.matchModule}>{module}</Text>
         </View>
-        <Text style={styles.matchScore}>{formatPercent(candidate?.confidence ?? entry?.confidence)}</Text>
+        <View style={styles.matchCardActions}>
+          {documentations.length > 0 ? (
+            <Pressable
+              onPress={() => onOpenDocumentation({ code, documentations })}
+              style={({ pressed }) => [styles.documentationButton, pressed && styles.buttonPressed]}
+            >
+              <View style={styles.documentationButtonIcon}>
+                <Text style={styles.documentationButtonIconText}>i</Text>
+              </View>
+              <Text style={styles.documentationButtonText}>{documentations.length === 1 ? 'Doc' : `Docs ${documentations.length}`}</Text>
+            </Pressable>
+          ) : null}
+          <Text style={styles.matchScore}>{formatPercent(candidate?.confidence ?? entry?.confidence)}</Text>
+        </View>
       </View>
 
       <Text style={styles.matchTitle}>{entry?.title || entry?.meaning || 'No manual meaning yet'}</Text>
@@ -1265,6 +1697,43 @@ function ErrorPreviewCard({ candidate, entry }: { candidate: DiagnosisCandidate 
         </View>
       ) : null}
     </View>
+  );
+}
+
+function DocumentationModal({
+  modal,
+  onClose,
+}: {
+  modal: { code: string; documentations: CodeDocumentation[] } | null;
+  onClose: () => void;
+}) {
+  return (
+    <Modal animationType="fade" onRequestClose={onClose} transparent visible={modal !== null}>
+      <View style={styles.modalBackdrop}>
+        <View style={[styles.modalPanel, styles.documentationModalPanel]}>
+          <View style={styles.pageTitleRow}>
+            <View style={styles.documentationModalTitleWrap}>
+              <Text style={[styles.sectionTitle, styles.pageTitle]}>Documentation</Text>
+              <Text style={styles.helperText}>
+                {modal ? `${modal.code} has ${modal.documentations.length} linked ${modal.documentations.length === 1 ? 'document' : 'documents'}.` : ''}
+              </Text>
+            </View>
+            <Pressable onPress={onClose} style={({ pressed }) => [styles.pageBackButton, pressed && styles.buttonPressed]}>
+              <Text style={styles.pageBackText}>Close</Text>
+            </Pressable>
+          </View>
+
+          <ScrollView contentContainerStyle={styles.documentationModalContent}>
+            {modal?.documentations.map((documentation) => (
+              <View key={documentation.id} style={styles.documentationCard}>
+                <Text style={styles.documentationCardTitle}>{documentation.title}</Text>
+                <DocumentationContent documentation={documentation} />
+              </View>
+            )) ?? null}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -1335,7 +1804,7 @@ function LoginScreen({
               <View style={styles.loginHero}>
                 <Text style={styles.eyebrow}>Machine Error Helper</Text>
                 <Text style={styles.title}>{isRegistering ? 'Create your account.' : 'Sign in to continue.'}</Text>
-                <Text style={styles.subtitle}>Diagnose machine dashboard alarms from screenshot to repair hint.</Text>
+                <Text style={styles.subtitle}>Diagnose machine dashboard alarms from screenshot to guided resolution.</Text>
               </View>
 
               <View style={styles.loginPanel}>
@@ -1452,11 +1921,13 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
   const [manualCode, setManualCode] = useState('');
   const [moduleKey, setModuleKey] = useState('PLUGSA');
   const [manualResult, setManualResult] = useState<DiagnosisDetail | null>(null);
+  const [selectedHistoryItem, setSelectedHistoryItem] = useState<DiagnosisHistoryItem | null>(null);
   const [addMachineModalOpen, setAddMachineModalOpen] = useState(false);
   const [machineSearch, setMachineSearch] = useState('');
   const fade = useRef(new Animated.Value(1)).current;
   const trimmedMachineSearch = machineSearch.trim();
   const userMachinesQueryKey = useMemo(() => ['user-machines', authToken] as const, [authToken]);
+  const diagnosisHistoryQueryKey = useMemo(() => ['diagnosis-history', authToken] as const, [authToken]);
 
   useEffect(() => {
     fade.setValue(0);
@@ -1490,12 +1961,18 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
     },
   });
 
+  const diagnosisHistoryQuery = useQuery({
+    queryKey: diagnosisHistoryQueryKey,
+    queryFn: () => fetchDiagnosisHistory(authToken),
+  });
+
   const upload = useMutation({
     mutationFn: (input: { machineId: number; asset: ImagePicker.ImagePickerAsset }) => uploadDiagnosis({ ...input, token: authToken }),
     onSuccess: (payload) => {
       setDiagnosisId(payload.id);
       setAutoAdvancedDiagnosisId(null);
       setManualResult(null);
+      void queryClient.invalidateQueries({ queryKey: diagnosisHistoryQueryKey });
     },
   });
 
@@ -1504,6 +1981,7 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
     onSuccess: (payload) => {
       setManualResult(payload);
       queryClient.setQueryData(['diagnosis', payload.id, authToken], payload);
+      void queryClient.invalidateQueries({ queryKey: diagnosisHistoryQueryKey });
       setPage('diagnosis');
       setDiagnosisStep('result');
     },
@@ -1584,6 +2062,7 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
     return null;
   }, [activeDiagnosis?.screenshot_url, selectedImage]);
   const userMachines = userMachinesQuery.data ?? [];
+  const diagnosisHistory = diagnosisHistoryQuery.data ?? [];
   const userMachineIds = useMemo(() => userMachines.map((machine) => machine.id), [userMachines]);
   const addableMachines = useMemo(
     () => (machines.data ?? []).filter((machine) => !userMachineIds.includes(machine.id)),
@@ -1594,16 +2073,18 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
       ? removeUserMachine.error.message
       : null;
   const addMachineError = addUserMachine.error instanceof Error ? addUserMachine.error.message : null;
+  const diagnosisHistoryError = diagnosisHistoryQuery.error instanceof Error ? diagnosisHistoryQuery.error.message : null;
 
   useEffect(() => {
     if (
       (machines.error instanceof ApiError && [401, 403].includes(machines.error.status)) ||
       (userMachinesQuery.error instanceof ApiError && [401, 403].includes(userMachinesQuery.error.status)) ||
-      (diagnosis.error instanceof ApiError && [401, 403].includes(diagnosis.error.status))
+      (diagnosis.error instanceof ApiError && [401, 403].includes(diagnosis.error.status)) ||
+      (diagnosisHistoryQuery.error instanceof ApiError && [401, 403].includes(diagnosisHistoryQuery.error.status))
     ) {
       onLogout();
     }
-  }, [diagnosis.error, machines.error, onLogout, userMachinesQuery.error]);
+  }, [diagnosis.error, diagnosisHistoryQuery.error, machines.error, onLogout, userMachinesQuery.error]);
 
   useEffect(() => {
     if (page !== 'diagnosis' || diagnosisStep !== 'upload' || !diagnosis.data || autoAdvancedDiagnosisId === diagnosis.data.id) {
@@ -1704,8 +2185,31 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
 
   function beginScan(): void {
     resetDiagnosisState();
+    setSelectedHistoryItem(null);
     setDiagnosisStep('upload');
     setPage(selectedMachine ? 'diagnosis' : 'machines');
+  }
+
+  function openDiagnosisHistory(): void {
+    setSelectedHistoryItem(null);
+    setPage('history');
+  }
+
+  function openDiagnosisHistoryItem(item: DiagnosisHistoryItem): void {
+    setSelectedImage(null);
+    setImageQuality(null);
+    setManualResult(null);
+    setDiagnosisId(item.id);
+    setSelectedHistoryItem(item);
+    setAutoAdvancedDiagnosisId(null);
+    setPage('history-detail');
+
+    const historyMachine = item.machine ? userMachines.find((machine) => machine.id === item.machine?.id) ?? null : null;
+
+    if (historyMachine) {
+      setSelectedMachine(historyMachine);
+      storeSelectedMachineId(authUser.id, historyMachine.id);
+    }
   }
 
   function closeAddMachineModal(): void {
@@ -1793,6 +2297,22 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
                         <Text style={styles.buttonText}>{selectedMachine ? 'Scan Code' : 'Choose Machine First'}</Text>
                       </Pressable>
                     </View>
+
+                    <View style={styles.dashboardCard}>
+                      <View style={styles.dashboardCardHeader}>
+                        <View>
+                          <Text style={styles.dashboardKicker}>History</Text>
+                          <Text style={styles.dashboardTitle}>Recent scans</Text>
+                        </View>
+                        <Text style={[styles.dashboardStatus, diagnosisHistory.length > 0 && styles.dashboardStatusActive]}>
+                          {diagnosisHistoryQuery.isLoading ? 'Loading' : `${diagnosisHistory.length} recent`}
+                        </Text>
+                      </View>
+                      <Text style={styles.dashboardText}>Open the full scan history and browse every uploaded diagnosis in one place.</Text>
+                      <Pressable onPress={openDiagnosisHistory} style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}>
+                        <Text style={styles.secondaryButtonText}>Open Scan History</Text>
+                      </Pressable>
+                    </View>
                   </View>
                 </View>
               ) : null}
@@ -1871,6 +2391,63 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
                     </View>
                   )}
 
+                </View>
+              ) : null}
+
+              {page === 'history' ? (
+                <View>
+                  <View style={styles.pageTitleRow}>
+                    <Text style={[styles.sectionTitle, styles.pageTitle]}>Scan history</Text>
+                    <Pressable onPress={() => setPage('dashboard')} style={({ pressed }) => [styles.pageBackButton, pressed && styles.buttonPressed]}>
+                      <Text style={styles.pageBackText}>Back to Dashboard</Text>
+                    </Pressable>
+                  </View>
+                  <Text style={styles.helperText}>All scanned diagnoses are listed here from newest to oldest. Open any record to review its overview.</Text>
+
+                  {diagnosisHistoryQuery.isLoading ? (
+                    <View style={styles.stateBox}>
+                      <ActivityIndicator color="#8fb7ff" />
+                      <Text style={styles.stateText}>Loading scan history</Text>
+                    </View>
+                  ) : diagnosisHistoryQuery.error ? (
+                    <View style={styles.stateBox}>
+                      <Text style={styles.error}>{diagnosisHistoryError ?? 'Could not load scan history.'}</Text>
+                    </View>
+                  ) : diagnosisHistory.length > 0 ? (
+                    <View style={styles.scanHistoryList}>
+                      {diagnosisHistory.map((item) => (
+                        <Pressable
+                          key={item.id}
+                          onPress={() => openDiagnosisHistoryItem(item)}
+                          style={({ pressed }) => [styles.scanHistoryRow, pressed && styles.buttonPressed]}
+                        >
+                          <View style={styles.scanHistoryRowHeader}>
+                            <View style={styles.scanHistoryCopy}>
+                              <Text style={styles.scanHistoryMachine}>{item.machine?.name ?? 'Unknown machine'}</Text>
+                              <Text style={styles.scanHistoryMeta}>{formatHistoryTimestamp(item.created_at)}</Text>
+                            </View>
+                            <Text
+                              style={[
+                                styles.scanHistoryBadge,
+                                item.status === 'resolved' && styles.scanHistoryBadgeResolved,
+                                item.status === 'needs_confirmation' && styles.scanHistoryBadgeNeedsCheck,
+                                (item.status === 'uploaded' || item.status === 'processing') && styles.scanHistoryBadgePending,
+                                item.status === 'failed' && styles.scanHistoryBadgeFailed,
+                              ]}
+                            >
+                              {statusLabel(item.status)}
+                            </Text>
+                          </View>
+                          <Text style={styles.scanHistoryCodes}>{historyCodesLabel(item)}</Text>
+                          {historyMatchLabel(item) ? <Text style={styles.scanHistoryMatch}>{historyMatchLabel(item)}</Text> : null}
+                        </Pressable>
+                      ))}
+                    </View>
+                  ) : (
+                    <View style={styles.stateBox}>
+                      <Text style={styles.stateText}>No scans yet. Once you analyze a screenshot, it will appear here.</Text>
+                    </View>
+                  )}
                 </View>
               ) : null}
 
@@ -2026,6 +2603,31 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
                       <Text style={styles.buttonText}>New Diagnosis</Text>
                     </Pressable>
                   </View>
+                </View>
+              ) : null}
+
+              {page === 'history-detail' ? (
+                <View>
+                  <View style={styles.pageTitleRow}>
+                    <Text style={[styles.sectionTitle, styles.pageTitle]}>Scan overview</Text>
+                    <Pressable onPress={() => setPage('history')} style={({ pressed }) => [styles.pageBackButton, pressed && styles.buttonPressed]}>
+                      <Text style={styles.pageBackText}>Back to History</Text>
+                    </Pressable>
+                  </View>
+                  <Text style={styles.helperText}>This is a read-only overview of the selected scan, including the uploaded screenshot and matched documentation.</Text>
+
+                  {diagnosis.isLoading ? (
+                    <View style={styles.stateBox}>
+                      <ActivityIndicator color="#8fb7ff" />
+                      <Text style={styles.stateText}>Loading scan overview</Text>
+                    </View>
+                  ) : diagnosis.error ? (
+                    <View style={styles.stateBox}>
+                      <Text style={styles.error}>{diagnosis.error.message}</Text>
+                    </View>
+                  ) : (
+                    <HistoryOverviewPanel detail={activeDiagnosis} item={selectedHistoryItem} />
+                  )}
                 </View>
               ) : null}
               </Animated.View>
@@ -2675,6 +3277,23 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     lineHeight: 20,
   },
+  dashboardStateBox: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.035)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 16,
+  },
+  dashboardStateText: {
+    color: '#b8bfcc',
+    fontSize: 14,
+    letterSpacing: 0,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
   subsectionTitle: {
     color: '#d9dde8',
     fontSize: 13,
@@ -2708,6 +3327,137 @@ const styles = StyleSheet.create({
   },
   savedMachineTextActive: {
     color: '#dbe6ff',
+  },
+  scanHistoryList: {
+    gap: 10,
+  },
+  scanHistoryRow: {
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  scanHistoryRowHeader: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+  },
+  scanHistoryCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  scanHistoryMachine: {
+    color: '#f7f8fb',
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  scanHistoryMeta: {
+    color: '#9ca5b6',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0,
+  },
+  scanHistoryBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.055)',
+    borderColor: 'rgba(255, 255, 255, 0.14)',
+    borderRadius: 8,
+    borderWidth: 1,
+    color: '#c4cad6',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    textTransform: 'uppercase',
+  },
+  scanHistoryBadgeResolved: {
+    backgroundColor: 'rgba(102, 224, 173, 0.12)',
+    borderColor: 'rgba(102, 224, 173, 0.32)',
+    color: '#b9f0d5',
+  },
+  scanHistoryBadgeNeedsCheck: {
+    backgroundColor: 'rgba(143, 183, 255, 0.12)',
+    borderColor: 'rgba(143, 183, 255, 0.32)',
+    color: '#d1e0ff',
+  },
+  scanHistoryBadgePending: {
+    backgroundColor: 'rgba(255, 214, 102, 0.12)',
+    borderColor: 'rgba(255, 214, 102, 0.28)',
+    color: '#ffe6a3',
+  },
+  scanHistoryBadgeFailed: {
+    backgroundColor: 'rgba(255, 107, 61, 0.12)',
+    borderColor: 'rgba(255, 107, 61, 0.3)',
+    color: '#ffc1ae',
+  },
+  scanHistoryCodes: {
+    color: '#f7f8fb',
+    fontSize: 18,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  scanHistoryMatch: {
+    color: '#8fb7ff',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 18,
+  },
+  scanOverviewStack: {
+    gap: 16,
+  },
+  scanOverviewMetaCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 12,
+    padding: 14,
+  },
+  scanOverviewMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  scanOverviewMetaBlock: {
+    flex: 1,
+    minWidth: 180,
+  },
+  scanOverviewMetaValue: {
+    color: '#f1f4fb',
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 21,
+    marginTop: 4,
+  },
+  scanOverviewCodeValue: {
+    color: '#f7f8fb',
+    fontSize: 20,
+    fontWeight: '900',
+    letterSpacing: 0,
+    marginTop: 4,
+  },
+  scanOverviewMatchedBox: {
+    backgroundColor: 'rgba(143, 183, 255, 0.08)',
+    borderColor: 'rgba(143, 183, 255, 0.18)',
+    borderRadius: 8,
+    borderWidth: 1,
+    padding: 12,
+  },
+  scanOverviewMatchedText: {
+    color: '#d7e4ff',
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 20,
+    marginTop: 4,
   },
   machineList: {
     gap: 10,
@@ -3118,6 +3868,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
+  matchCardActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
   matchCode: {
     color: '#8fb7ff',
     fontSize: 22,
@@ -3142,6 +3897,40 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     paddingHorizontal: 9,
     paddingVertical: 5,
+  },
+  documentationButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.055)',
+    borderColor: 'rgba(255, 255, 255, 0.14)',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  documentationButtonIcon: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(143, 183, 255, 0.18)',
+    borderColor: 'rgba(143, 183, 255, 0.42)',
+    borderRadius: 999,
+    borderWidth: 1,
+    height: 18,
+    justifyContent: 'center',
+    width: 18,
+  },
+  documentationButtonIconText: {
+    color: '#cfe0ff',
+    fontSize: 12,
+    fontWeight: '900',
+    lineHeight: 12,
+  },
+  documentationButtonText: {
+    color: '#dce5f9',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
   },
   matchTitle: {
     color: '#f7f8fb',
@@ -3285,6 +4074,171 @@ const styles = StyleSheet.create({
   imageViewerImage: {
     height: '100%',
     width: '100%',
+  },
+  documentationModalPanel: {
+    maxWidth: 860,
+  },
+  documentationModalTitleWrap: {
+    flex: 1,
+    paddingRight: 12,
+  },
+  documentationModalContent: {
+    gap: 12,
+    paddingBottom: 4,
+    paddingTop: 16,
+  },
+  documentationCard: {
+    backgroundColor: 'rgba(8, 9, 10, 0.68)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 8,
+    borderWidth: 1,
+    padding: 14,
+  },
+  documentationCardTitle: {
+    color: '#f7f8fb',
+    fontSize: 17,
+    fontWeight: '900',
+    letterSpacing: 0,
+    marginBottom: 12,
+  },
+  documentationContent: {
+    gap: 10,
+  },
+  documentationHeading: {
+    color: '#f7f8fb',
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  documentationHeadingLarge: {
+    fontSize: 19,
+    lineHeight: 26,
+  },
+  documentationHeadingSmall: {
+    fontSize: 16,
+    lineHeight: 23,
+  },
+  documentationHeadingText: {
+    color: '#f7f8fb',
+  },
+  documentationParagraph: {
+    color: '#d9d4c6',
+    fontSize: 15,
+    letterSpacing: 0,
+    lineHeight: 22,
+  },
+  documentationParagraphMedia: {
+    gap: 10,
+  },
+  documentationParagraphText: {
+    color: '#d9d4c6',
+  },
+  documentationBoldText: {
+    fontWeight: '900',
+  },
+  documentationItalicText: {
+    fontStyle: 'italic',
+  },
+  documentationUnderlineText: {
+    textDecorationLine: 'underline',
+  },
+  documentationStrikeText: {
+    textDecorationLine: 'line-through',
+  },
+  documentationInlineCodeText: {
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    color: '#f7f8fb',
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+    fontSize: 14,
+  },
+  documentationLinkText: {
+    color: '#8fb7ff',
+    textDecorationLine: 'underline',
+  },
+  documentationList: {
+    gap: 8,
+  },
+  documentationListItemRow: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  documentationBullet: {
+    color: '#8fb7ff',
+    fontSize: 15,
+    fontWeight: '900',
+    lineHeight: 22,
+    minWidth: 18,
+  },
+  documentationListItemBody: {
+    flex: 1,
+    gap: 6,
+  },
+  documentationQuote: {
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    borderLeftColor: '#8fb7ff',
+    borderLeftWidth: 3,
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  documentationCodeBlock: {
+    backgroundColor: 'rgba(0, 0, 0, 0.36)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 8,
+    borderWidth: 1,
+    padding: 12,
+  },
+  documentationCodeBlockText: {
+    color: '#f7f8fb',
+    fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }),
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  documentationImage: {
+    alignSelf: 'stretch',
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 220,
+    width: '100%',
+  },
+  documentationInlineImage: {
+    alignSelf: 'stretch',
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 220,
+    width: '100%',
+  },
+  documentationTable: {
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    borderRadius: 8,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  documentationTableRow: {
+    flexDirection: 'row',
+  },
+  documentationTableCell: {
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderRightWidth: 1,
+    borderTopWidth: 1,
+    flex: 1,
+    gap: 6,
+    minWidth: 0,
+    padding: 10,
+  },
+  documentationTableHeaderCell: {
+    backgroundColor: 'rgba(143, 183, 255, 0.08)',
+  },
+  documentationDivider: {
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    height: 1,
+  },
+  documentationFallbackBlock: {
+    gap: 8,
   },
   modalPanel: {
     backgroundColor: 'rgba(20, 22, 29, 0.96)',

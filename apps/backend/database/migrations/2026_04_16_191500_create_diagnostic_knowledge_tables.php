@@ -92,16 +92,6 @@ return new class extends Migration
             });
         }
 
-        if (! Schema::hasColumn('repair_hints', 'diagnostic_entry_id')) {
-            Schema::table('repair_hints', function (Blueprint $table) {
-                $table->foreignId('diagnostic_entry_id')
-                    ->nullable()
-                    ->after('error_code_definition_id')
-                    ->constrained('diagnostic_entries')
-                    ->cascadeOnDelete();
-            });
-        }
-
         if (DB::connection()->getDriverName() === 'pgsql') {
             DB::statement('CREATE INDEX IF NOT EXISTS diagnostic_entries_context_gin ON diagnostic_entries USING gin ((context::jsonb))');
             DB::statement('CREATE INDEX IF NOT EXISTS diagnostic_entries_identifiers_gin ON diagnostic_entries USING gin ((identifiers::jsonb))');
@@ -121,12 +111,6 @@ return new class extends Migration
                     'context',
                     'identifiers',
                 ]);
-            });
-        }
-
-        if (Schema::hasTable('repair_hints')) {
-            Schema::table('repair_hints', function (Blueprint $table) {
-                $table->dropConstrainedForeignId('diagnostic_entry_id');
             });
         }
 

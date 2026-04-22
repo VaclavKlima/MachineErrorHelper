@@ -2,11 +2,14 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Casts\Attribute;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Throwable;
 
 class DiagnosisRequest extends Model
 {
@@ -23,6 +26,8 @@ class DiagnosisRequest extends Model
         'screenshot_path',
         'status',
         'raw_ocr_text',
+        'ai_detected_codes',
+        'user_entered_codes',
         'confidence',
         'result_payload',
     ];
@@ -31,6 +36,8 @@ class DiagnosisRequest extends Model
     {
         return [
             'confidence' => 'float',
+            'ai_detected_codes' => 'array',
+            'user_entered_codes' => 'array',
             'result_payload' => 'array',
         ];
     }
@@ -57,6 +64,11 @@ class DiagnosisRequest extends Model
         return $this->belongsTo(SoftwareVersion::class);
     }
 
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
+
     public function candidates(): HasMany
     {
         return $this->hasMany(DiagnosisCandidate::class);
@@ -65,5 +77,23 @@ class DiagnosisRequest extends Model
     public function selectedDiagnosticEntry(): BelongsTo
     {
         return $this->belongsTo(DiagnosticEntry::class, 'selected_diagnostic_entry_id');
+    }
+
+    protected function screenshotUrl(): Attribute
+    {
+        return Attribute::get(function (): ?string {
+            if (! filled($this->screenshot_path)) {
+                return null;
+            }
+
+            try {
+                return Storage::disk('local')->temporaryUrl(
+                    $this->screenshot_path,
+                    now()->addMinutes(30),
+                );
+            } catch (Throwable) {
+                return Storage::disk('local')->url($this->screenshot_path);
+            }
+        });
     }
 }

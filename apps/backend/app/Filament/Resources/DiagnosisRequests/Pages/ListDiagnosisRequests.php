@@ -3,7 +3,6 @@
 namespace App\Filament\Resources\DiagnosisRequests\Pages;
 
 use App\Filament\Resources\DiagnosisRequests\DiagnosisRequestResource;
-use Filament\Actions\CreateAction;
 use Filament\Resources\Pages\ListRecords;
 
 class ListDiagnosisRequests extends ListRecords
@@ -12,8 +11,6 @@ class ListDiagnosisRequests extends ListRecords
 
     protected function getHeaderActions(): array
     {
-        return [
-            CreateAction::make(),
-        ];
+        return [];
     }
 }

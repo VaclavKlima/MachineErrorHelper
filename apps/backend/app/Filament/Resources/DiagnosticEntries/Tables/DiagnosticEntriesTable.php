@@ -69,6 +69,10 @@ class DiagnosticEntriesTable
                 TextColumn::make('confidence')
                     ->numeric(decimalPlaces: 2)
                     ->sortable(),
+                TextColumn::make('code_documentations_count')
+                    ->label('Docs')
+                    ->counts('codeDocumentations')
+                    ->badge(),
             ])
             ->filters([
                 SelectFilter::make('status')

@@ -74,7 +74,7 @@ Use Filament 5.
 
 Reasoning:
 
-- Fast CRUD for machines, manuals, versions, code definitions, hints, and review queues.
+- Fast CRUD for machines, manuals, versions, code definitions, diagnostic entries, and review queues.
 - It already uses Tailwind and works naturally with Laravel.
 - It avoids spending early effort on custom admin UI.
 
@@ -85,7 +85,6 @@ Admin resources to build first:
 - ManualResource
 - ManualImportRunResource
 - ErrorCodeResource
-- RepairHintResource
 - DiagnosisRequestResource
 
 ## User Frontend

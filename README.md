@@ -1,6 +1,6 @@
 # Machine Error Helper
 
-Monorepo for an application that identifies machine dashboard error codes from screenshots and explains them using administrator-managed manuals and repair hints.
+Monorepo for an application that identifies machine dashboard error codes from screenshots and explains them using administrator-managed manuals and diagnostic entries.
 
 The repository currently contains the initial Laravel backend/admin scaffold, Docker development stack, Expo mobile scaffold, and planning documentation for the manual ingestion and diagnosis pipeline.
 
@@ -8,7 +8,7 @@ The repository currently contains the initial Laravel backend/admin scaffold, Do
 
 The application has two major surfaces:
 
-- Administration: Laravel + Tailwind based back office for configuring machines, software/manual versions, PDF manuals, extracted error codes, and repair hints.
+- Administration: Laravel + Tailwind based back office for configuring machines, software/manual versions, PDF manuals, extracted error codes, and diagnostic entries.
 - User interface: Expo client for mobile and web where a user selects a machine, uploads a screenshot of the machine dashboard, and receives the likely error meaning plus fix guidance.
 
 The difficult part is not only reading a code from an image. The difficult part is maintaining a reliable, versioned knowledge base from large and inconsistent PDF manuals.
@@ -37,7 +37,7 @@ Implemented:
 
 - Docker Compose with PHP 8.5 FPM, nginx, PostgreSQL + pgvector, Redis, workers, scheduler, and Mailpit.
 - Laravel 13 backend with Filament 5, Prism, Horizon, Telescope, Sanctum, Media Library, permissions, PDF/OCR helpers, and Sentry package installed.
-- Domain migrations and models for machines, manuals, versions, manual chunks, error codes, definitions, repair hints, diagnosis requests, and diagnosis candidates.
+- Domain migrations and models for machines, manuals, versions, manual chunks, error codes, definitions, diagnostic entries, diagnosis requests, and diagnosis candidates.
 - Initial JSON API for machine listing and screenshot diagnosis requests.
 - Initial Filament resources generated for the main admin records.
 - Expo TypeScript app with machine loading, screenshot upload flow, and dark machinist UI for mobile and web.
@@ -121,7 +121,6 @@ AI should speed up extraction and matching, but it should not be the source of t
 - manual files
 - extracted manual sections
 - approved error-code definitions
-- admin repair hints
 - user diagnosis history
 
 When confidence is low, the product should ask the user or admin to confirm instead of pretending certainty.

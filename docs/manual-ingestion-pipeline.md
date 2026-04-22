@@ -126,7 +126,7 @@ Use these for:
 
 - admin search inside manuals
 - fallback user search when exact code lookup fails
-- finding related repair hints
+- finding related diagnostic entries
 
 ### 7. Admin Review
 
