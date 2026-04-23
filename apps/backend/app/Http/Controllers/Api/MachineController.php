@@ -26,7 +26,6 @@ class MachineController extends Controller
                 });
             })
             ->orderBy('name')
-            ->limit(30)
             ->get(['id', 'name', 'slug', 'manufacturer', 'model_number']);
 
         return response()->json(['data' => $machines]);

@@ -35,7 +35,7 @@ class ScreenshotDiagnosticExtractionService
         }
 
         $response = Prism::structured()
-            ->using($this->provider(), (string) env('SCREENSHOT_AI_MODEL', 'gemini-2.0-flash'))
+            ->using($this->provider(), (string) env('SCREENSHOT_AI_MODEL', 'gemini-2.5-pro'))
             ->withSchema($this->schema())
             ->withSystemPrompt($this->systemPrompt())
             ->withPrompt($this->prompt(), [

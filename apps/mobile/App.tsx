@@ -286,15 +286,15 @@ const codeDocumentationSchema = z
 const diagnosticEntrySchema = z
   .object({
     id: z.number(),
-    module_key: z.string().nullable(),
-    primary_code: z.string().nullable(),
-    title: z.string().nullable(),
-    meaning: z.string().nullable(),
-    cause: z.string().nullable(),
-    recommended_action: z.string().nullable(),
-    severity: z.string().nullable(),
-    source_page_number: z.number().nullable(),
-    confidence: z.number().nullable(),
+    module_key: z.string().nullable().optional(),
+    primary_code: z.string().nullable().optional(),
+    title: z.string().nullable().optional(),
+    meaning: z.string().nullable().optional(),
+    cause: z.string().nullable().optional(),
+    recommended_action: z.string().nullable().optional(),
+    severity: z.string().nullable().optional(),
+    source_page_number: z.number().nullable().optional(),
+    confidence: z.number().nullable().optional(),
     code_documentations: z.array(codeDocumentationSchema).optional().default([]),
   })
   .passthrough();
@@ -1089,16 +1089,6 @@ function DotMesh({ cellSize, phase, rows }: { cellSize: number; phase: Animated.
   );
 }
 
-function WindowControls() {
-  return (
-    <View style={styles.windowControls}>
-      <View style={[styles.windowDot, styles.windowDotClose]} />
-      <View style={[styles.windowDot, styles.windowDotMinimize]} />
-      <View style={[styles.windowDot, styles.windowDotMaximize]} />
-    </View>
-  );
-}
-
 function splitCodeInput(value: string): string[] {
   return Array.from(
     new Set(
@@ -1142,7 +1132,13 @@ function formatHistoryTimestamp(value: string | null): string {
     return value;
   }
 
-  return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  const day = `${date.getDate()}`.padStart(2, '0');
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const year = date.getFullYear();
+  const hours = `${date.getHours()}`.padStart(2, '0');
+  const minutes = `${date.getMinutes()}`.padStart(2, '0');
+
+  return `${day}/${month}/${year} ${hours}:${minutes}`;
 }
 
 function historyCodesLabel(item: DiagnosisHistoryItem): string {
@@ -1645,6 +1641,97 @@ function HistoryOverviewPanel({
   );
 }
 
+function DashboardActionTile({
+  disabled = false,
+  fullWidth = false,
+  label,
+  meta,
+  onPress,
+  tone = 'neutral',
+  value,
+}: {
+  disabled?: boolean;
+  fullWidth?: boolean;
+  label: string;
+  meta: string;
+  onPress: () => void;
+  tone?: 'neutral' | 'primary' | 'warning';
+  value: string;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.dashboardActionTile,
+        fullWidth && styles.dashboardActionTileFullWidth,
+        tone === 'primary' && styles.dashboardActionTilePrimary,
+        tone === 'warning' && styles.dashboardActionTileWarning,
+        disabled && styles.dashboardActionTileDisabled,
+        pressed && styles.buttonPressed,
+      ]}
+    >
+      <Text style={[styles.dashboardActionLabel, tone === 'primary' && styles.dashboardActionLabelPrimary]}>{label}</Text>
+      <Text
+        numberOfLines={2}
+        style={[
+          styles.dashboardActionValue,
+          tone === 'primary' && styles.dashboardActionValuePrimary,
+          disabled && styles.dashboardActionValueDisabled,
+        ]}
+      >
+        {value}
+      </Text>
+      <Text
+        numberOfLines={2}
+        style={[
+          styles.dashboardActionMeta,
+          tone === 'primary' && styles.dashboardActionMetaPrimary,
+          disabled && styles.dashboardActionMetaDisabled,
+        ]}
+      >
+        {meta}
+      </Text>
+    </Pressable>
+  );
+}
+
+function DashboardHistoryRow({
+  item,
+  onPress,
+}: {
+  item: DiagnosisHistoryItem;
+  onPress: (item: DiagnosisHistoryItem) => void;
+}) {
+  return (
+    <Pressable onPress={() => onPress(item)} style={({ pressed }) => [styles.dashboardHistoryRow, pressed && styles.buttonPressed]}>
+      <View style={styles.dashboardHistoryRowTop}>
+        <Text numberOfLines={1} style={styles.dashboardHistoryRowMachine}>
+          {item.machine?.name ?? 'Unknown machine'}
+        </Text>
+        <Text
+          style={[
+            styles.dashboardHistoryRowStatus,
+            item.status === 'resolved' && styles.dashboardHistoryRowStatusResolved,
+            item.status === 'needs_confirmation' && styles.dashboardHistoryRowStatusNeedsCheck,
+            (item.status === 'uploaded' || item.status === 'processing') && styles.dashboardHistoryRowStatusPending,
+            item.status === 'failed' && styles.dashboardHistoryRowStatusFailed,
+          ]}
+        >
+          {statusLabel(item.status)}
+        </Text>
+      </View>
+      <Text numberOfLines={1} style={styles.dashboardHistoryRowCode}>
+        {historyCodesLabel(item)}
+      </Text>
+      <Text numberOfLines={1} style={styles.dashboardHistoryRowMeta}>
+        {formatHistoryTimestamp(item.created_at)}
+      </Text>
+    </Pressable>
+  );
+}
+
 function ErrorPreviewCard({
   candidate,
   entry,
@@ -1795,10 +1882,11 @@ function LoginScreen({
         <ScrollView contentContainerStyle={styles.loginScrollContent} keyboardShouldPersistTaps="handled">
           <View style={styles.loginShell}>
             <View style={styles.loginWindow}>
-              <View style={styles.windowToolbar}>
-                <WindowControls />
-                <Text style={styles.windowTitle}>Machine Error Helper</Text>
-                <View style={styles.windowToolbarSpacer} />
+              <View style={styles.appToolbar}>
+                <View style={styles.appToolbarCopy}>
+                  <Text style={styles.appToolbarLabel}>Machine Error Helper</Text>
+                  <Text style={styles.appToolbarTitle}>{isRegistering ? 'Create account' : 'Sign in'}</Text>
+                </View>
               </View>
 
               <View style={styles.loginHero}>
@@ -1910,6 +1998,7 @@ function LoginScreen({
 }
 
 function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: string; authUser: AuthUser; onLogout: () => void }) {
+  const { width } = useWindowDimensions();
   const [page, setPage] = useState<AppPage>('dashboard');
   const [diagnosisStep, setDiagnosisStep] = useState<DiagnosisStep>('upload');
   const [selectedMachine, setSelectedMachine] = useState<Machine | null>(null);
@@ -1924,6 +2013,7 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
   const [selectedHistoryItem, setSelectedHistoryItem] = useState<DiagnosisHistoryItem | null>(null);
   const [addMachineModalOpen, setAddMachineModalOpen] = useState(false);
   const [machineSearch, setMachineSearch] = useState('');
+  const [debouncedMachineSearch, setDebouncedMachineSearch] = useState('');
   const fade = useRef(new Animated.Value(1)).current;
   const trimmedMachineSearch = machineSearch.trim();
   const userMachinesQueryKey = useMemo(() => ['user-machines', authToken] as const, [authToken]);
@@ -1940,9 +2030,10 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
   }, [diagnosisStep, fade, page]);
 
   const machines = useQuery({
-    enabled: addMachineModalOpen && trimmedMachineSearch.length >= 2,
-    queryKey: ['machines', authToken, trimmedMachineSearch],
-    queryFn: () => fetchMachines(authToken, trimmedMachineSearch),
+    enabled: addMachineModalOpen,
+    placeholderData: (previousData) => previousData,
+    queryKey: ['machines', authToken, debouncedMachineSearch],
+    queryFn: () => fetchMachines(authToken, debouncedMachineSearch),
   });
 
   const userMachinesQuery = useQuery({
@@ -1989,9 +2080,13 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
 
   const addUserMachine = useMutation({
     mutationFn: (machine: Machine) => attachUserMachine({ machineId: machine.id, token: authToken }),
-    onSuccess: async (machine) => {
+    onSuccess: (machine) => {
       queryClient.setQueryData<Machine[]>(userMachinesQueryKey, (current = []) =>
         sortMachinesByName([...current.filter((candidate) => candidate.id !== machine.id), machine]),
+      );
+      queryClient.setQueriesData<Machine[]>(
+        { queryKey: ['machines', authToken] },
+        (current) => current?.filter((candidate) => candidate.id !== machine.id) ?? current,
       );
 
       setSelectedMachine((current) => {
@@ -2003,22 +2098,25 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
 
         return machine;
       });
-      await queryClient.refetchQueries({ queryKey: userMachinesQueryKey, type: 'active' });
       setAddMachineModalOpen(false);
       setMachineSearch('');
+      setDebouncedMachineSearch('');
+      void queryClient.invalidateQueries({ queryKey: userMachinesQueryKey });
+      void queryClient.invalidateQueries({ queryKey: ['machines', authToken] });
     },
   });
 
   const removeUserMachine = useMutation({
     mutationFn: (machine: Machine) => detachUserMachine({ machineId: machine.id, token: authToken }),
-    onSuccess: (_payload, machine) => {
-      let nextUserMachines: Machine[] = [];
+    onMutate: (machine) => {
+      const currentUserMachines = queryClient.getQueryData<Machine[]>(userMachinesQueryKey) ?? [];
+      const nextUserMachines = currentUserMachines.filter((candidate) => candidate.id !== machine.id);
 
-      queryClient.setQueryData<Machine[]>(userMachinesQueryKey, (current = []) => {
-        nextUserMachines = current.filter((candidate) => candidate.id !== machine.id);
-
-        return nextUserMachines;
-      });
+      queryClient.setQueryData<Machine[]>(userMachinesQueryKey, nextUserMachines);
+      queryClient.setQueriesData<Machine[]>(
+        { queryKey: ['machines', authToken] },
+        (current = []) => sortMachinesByName([...current.filter((candidate) => candidate.id !== machine.id), machine]),
+      );
 
       setSelectedMachine((current) => {
         if (current?.id !== machine.id) {
@@ -2035,6 +2133,10 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
 
         return nextSelectedMachine;
       });
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: userMachinesQueryKey });
+      void queryClient.invalidateQueries({ queryKey: ['machines', authToken] });
     },
   });
 
@@ -2074,6 +2176,41 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
       : null;
   const addMachineError = addUserMachine.error instanceof Error ? addUserMachine.error.message : null;
   const diagnosisHistoryError = diagnosisHistoryQuery.error instanceof Error ? diagnosisHistoryQuery.error.message : null;
+  const recentDashboardHistory = useMemo(() => diagnosisHistory.slice(0, 4), [diagnosisHistory]);
+  const shellStyle = useMemo(
+    () => [styles.shell, width >= 560 ? styles.dashboardShell : null],
+    [width],
+  );
+  const stepCardStyle = useMemo(
+    () => [styles.stepCard, styles.dashboardStepCard],
+    [],
+  );
+  const currentPageLabel = useMemo(() => {
+    if (page === 'machines') {
+      return 'Machines';
+    }
+
+    if (page === 'history') {
+      return 'Scan history';
+    }
+
+    if (page === 'history-detail') {
+      return 'Scan overview';
+    }
+
+    if (page === 'diagnosis') {
+      switch (diagnosisStep) {
+        case 'confirm':
+          return 'Confirm codes';
+        case 'result':
+          return 'Error preview';
+        default:
+          return 'Scan';
+      }
+    }
+
+    return 'Dashboard';
+  }, [diagnosisStep, page]);
 
   useEffect(() => {
     if (
@@ -2132,6 +2269,20 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
       forgetSelectedMachineId(authUser.id);
     }
   }, [authUser.id, selectedMachine, userMachines, userMachinesQuery.isSuccess]);
+
+  useEffect(() => {
+    if (!addMachineModalOpen) {
+      setDebouncedMachineSearch('');
+
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      setDebouncedMachineSearch(trimmedMachineSearch);
+    }, 220);
+
+    return () => clearTimeout(timeout);
+  }, [addMachineModalOpen, trimmedMachineSearch]);
 
   async function chooseImage(source: ImageSource): Promise<void> {
     const asset = await pickImage(source);
@@ -2224,11 +2375,13 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
       <StatusBar style="light" />
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.keyboard}>
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-          <View style={styles.shell}>
+          <View style={shellStyle}>
             <View style={styles.appWindow}>
-              <View style={styles.windowToolbar}>
-                <WindowControls />
-                <Text style={styles.windowTitle}>Machine Error Helper</Text>
+              <View style={styles.appToolbar}>
+                <View style={styles.appToolbarCopy}>
+                  <Text style={styles.appToolbarLabel}>Machine Error Helper</Text>
+                  <Text style={styles.appToolbarTitle}>{currentPageLabel}</Text>
+                </View>
                 <Pressable onPress={onLogout} style={({ pressed }) => [styles.logoutButton, pressed && styles.buttonPressed]}>
                   <Text style={styles.logoutText}>Logout</Text>
                 </Pressable>
@@ -2236,112 +2389,120 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
 
               {page === 'diagnosis' ? <Stepper currentStep={diagnosisStep} /> : null}
 
-              <Animated.View style={[styles.stepCard, { opacity: fade, transform: [{ translateY }] }]}>
+              <Animated.View style={[stepCardStyle, { opacity: fade, transform: [{ translateY }] }]}>
               {page === 'dashboard' ? (
-                <View>
-                  <Text style={styles.sectionTitle}>Dashboard</Text>
-                  <Text style={styles.helperText}>Start with your machine, then scan the code shown on its display.</Text>
-
-                  <View style={styles.dashboardGrid}>
-                    <View style={styles.dashboardCard}>
-                      <View style={styles.dashboardCardHeader}>
-                        <View>
-                          <Text style={styles.dashboardKicker}>Machine</Text>
-                          <Text style={styles.dashboardTitle}>My machines</Text>
-                        </View>
-                        <Text style={[styles.dashboardStatus, selectedMachine && styles.dashboardStatusActive]}>
-                          {userMachinesQuery.isLoading ? 'Loading' : `${userMachines.length} saved`}
-                        </Text>
-                      </View>
-                      <Text style={styles.dashboardText}>
-                        {selectedMachine
-                          ? `Active: ${selectedMachine.name}${machineDetails ? `, ${machineDetails}` : ''}`
-                          : 'Add the machine you are working on. Your saved machines stay connected to your account.'}
+                <View style={styles.dashboardScreen}>
+                  <View style={styles.dashboardHeroCard}>
+                    <View style={styles.dashboardHeroCopy}>
+                      <Text style={styles.dashboardHeroLabel}>Active machine</Text>
+                      <Text numberOfLines={2} style={styles.dashboardHeroTitle}>
+                        {selectedMachine ? selectedMachine.name : 'Choose a machine'}
                       </Text>
-                      {userMachines.length > 0 ? (
-                        <View style={styles.savedMachineList}>
-                          {userMachines.map((machine) => (
-                            <Pressable
-                              key={machine.id}
-                              onPress={() => selectMachine(machine)}
-                              style={({ pressed }) => [
-                                styles.savedMachinePill,
-                                selectedMachine?.id === machine.id && styles.savedMachinePillActive,
-                                pressed && styles.buttonPressed,
-                              ]}
-                            >
-                              <Text style={[styles.savedMachineText, selectedMachine?.id === machine.id && styles.savedMachineTextActive]}>
-                                {machine.name}
-                              </Text>
-                            </Pressable>
-                          ))}
-                        </View>
+                      <Text numberOfLines={1} style={styles.dashboardHeroMeta}>
+                        {selectedMachine ? machineDetails ?? 'Ready to scan' : 'Required before scanning'}
+                      </Text>
+                    </View>
+                    <Text style={[styles.dashboardHeroBadge, selectedMachine && styles.dashboardHeroBadgeActive]}>
+                      {selectedMachine ? 'Ready' : 'Select'}
+                    </Text>
+                  </View>
+
+                  <View style={styles.dashboardActionGrid}>
+                    <DashboardActionTile
+                      label="Scan"
+                      meta={selectedMachine ? 'Take photo or upload' : 'Choose machine first'}
+                      onPress={beginScan}
+                      tone="primary"
+                      value={selectedMachine ? 'Start' : 'Select'}
+                    />
+                    <DashboardActionTile
+                      label="Machines"
+                      meta={selectedMachine ? 'Active machine saved' : 'Manage machine list'}
+                      onPress={() => setPage('machines')}
+                      value={userMachinesQuery.isLoading ? '...' : String(userMachines.length)}
+                    />
+                    <DashboardActionTile
+                      fullWidth
+                      label="History"
+                      meta="All scans"
+                      onPress={openDiagnosisHistory}
+                      value={diagnosisHistoryQuery.isLoading ? '...' : String(diagnosisHistory.length)}
+                    />
+                  </View>
+
+                  <View style={styles.dashboardSection}>
+                    <View style={styles.dashboardSectionHeader}>
+                      <Text style={styles.dashboardSectionTitle}>Recent scans</Text>
+                      {diagnosisHistory.length > 0 ? (
+                        <Pressable onPress={openDiagnosisHistory} style={({ pressed }) => [styles.dashboardInlineLink, pressed && styles.buttonPressed]}>
+                          <Text style={styles.dashboardInlineLinkText}>All</Text>
+                        </Pressable>
                       ) : null}
-                      <Pressable onPress={() => setPage('machines')} style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}>
-                        <Text style={styles.secondaryButtonText}>Manage Machines</Text>
-                      </Pressable>
                     </View>
 
-                    <View style={styles.dashboardCard}>
-                      <View style={styles.dashboardCardHeader}>
-                        <View>
-                          <Text style={styles.dashboardKicker}>Diagnosis</Text>
-                          <Text style={styles.dashboardTitle}>Scan the code</Text>
-                        </View>
-                        <Text style={styles.dashboardStatus}>Next</Text>
+                    {diagnosisHistoryQuery.isLoading ? (
+                      <View style={styles.dashboardStateBox}>
+                        <ActivityIndicator color="#8fb7ff" />
+                        <Text style={styles.dashboardStateText}>Loading</Text>
                       </View>
-                      <Text style={styles.dashboardText}>
-                        Take a photo or upload a screenshot of the dashboard alarm and confirm the detected code.
-                      </Text>
-                      <Pressable onPress={beginScan} style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}>
-                        <Text style={styles.buttonText}>{selectedMachine ? 'Scan Code' : 'Choose Machine First'}</Text>
-                      </Pressable>
-                    </View>
-
-                    <View style={styles.dashboardCard}>
-                      <View style={styles.dashboardCardHeader}>
-                        <View>
-                          <Text style={styles.dashboardKicker}>History</Text>
-                          <Text style={styles.dashboardTitle}>Recent scans</Text>
-                        </View>
-                        <Text style={[styles.dashboardStatus, diagnosisHistory.length > 0 && styles.dashboardStatusActive]}>
-                          {diagnosisHistoryQuery.isLoading ? 'Loading' : `${diagnosisHistory.length} recent`}
-                        </Text>
+                    ) : recentDashboardHistory.length > 0 ? (
+                      <View style={styles.dashboardList}>
+                        {recentDashboardHistory.map((item) => (
+                          <DashboardHistoryRow key={item.id} item={item} onPress={openDiagnosisHistoryItem} />
+                        ))}
                       </View>
-                      <Text style={styles.dashboardText}>Open the full scan history and browse every uploaded diagnosis in one place.</Text>
-                      <Pressable onPress={openDiagnosisHistory} style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}>
-                        <Text style={styles.secondaryButtonText}>Open Scan History</Text>
-                      </Pressable>
-                    </View>
+                    ) : (
+                      <View style={styles.dashboardStateBox}>
+                        <Text style={styles.dashboardStateText}>No scans yet</Text>
+                      </View>
+                    )}
                   </View>
                 </View>
               ) : null}
 
               {page === 'machines' ? (
-                <View>
+                <View style={styles.machinesScreen}>
                   <View style={styles.pageTitleRow}>
                     <Text style={[styles.sectionTitle, styles.pageTitle]}>My machines</Text>
                     <Pressable onPress={() => setPage('dashboard')} style={({ pressed }) => [styles.pageBackButton, pressed && styles.buttonPressed]}>
                       <Text style={styles.pageBackText}>Back to Dashboard</Text>
                     </Pressable>
                   </View>
-                  <Text style={styles.helperText}>Manage the machines you use. Choose one as active or add another machine from the catalog.</Text>
+
+                  <View style={styles.machinesHeroCard}>
+                    <View style={styles.machinesHeroCopy}>
+                      <Text style={styles.dashboardHeroLabel}>Active machine</Text>
+                      <Text numberOfLines={2} style={styles.machinesHeroTitle}>
+                        {selectedMachine ? selectedMachine.name : 'No machine selected'}
+                      </Text>
+                      <Text numberOfLines={1} style={styles.machinesHeroMeta}>
+                        {selectedMachine ? machineDetails ?? 'Ready to scan' : 'Choose one machine for scanning'}
+                      </Text>
+                    </View>
+                    <Text style={[styles.dashboardHeroBadge, selectedMachine && styles.dashboardHeroBadgeActive]}>
+                      {userMachinesQuery.isLoading ? '...' : `${userMachines.length}`}
+                    </Text>
+                  </View>
+
                   <Pressable onPress={() => setAddMachineModalOpen(true)} style={({ pressed }) => [styles.addMachineButton, pressed && styles.buttonPressed]}>
-                    <Text style={styles.buttonText}>Add Machine</Text>
+                    <Text style={styles.buttonText}>Add machine</Text>
                   </Pressable>
 
                   {userMachinesQuery.isLoading ? (
-                    <View style={styles.stateBox}>
+                    <View style={styles.dashboardStateBox}>
                       <ActivityIndicator color="#8fb7ff" />
-                      <Text style={styles.stateText}>Loading saved machines</Text>
+                      <Text style={styles.dashboardStateText}>Loading machines</Text>
                     </View>
                   ) : userMachinesQuery.error ? (
-                    <View style={styles.stateBox}>
+                    <View style={styles.dashboardStateBox}>
                       <Text style={styles.error}>Backend is not reachable at {apiBaseUrl}</Text>
                     </View>
                   ) : (
-                    <View>
-                      <Text style={styles.subsectionTitle}>Saved machines</Text>
+                    <View style={styles.dashboardSection}>
+                      <View style={styles.dashboardSectionHeader}>
+                        <Text style={styles.dashboardSectionTitle}>Saved machines</Text>
+                        <Text style={styles.machinesSectionBadge}>{userMachines.length}</Text>
+                      </View>
                       {userMachines.length > 0 ? (
                         <View style={styles.machineList}>
                           {userMachines.map((machine) => {
@@ -2349,32 +2510,41 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
 
                             return (
                               <View key={machine.id} style={[styles.machineRow, selected && styles.machineRowSelected]}>
-                                <View style={styles.machineInfo}>
-                                  <Text style={styles.machineName}>{machine.name}</Text>
-                                  <Text style={styles.machineMeta}>
-                                    {[machine.manufacturer, machine.model_number].filter(Boolean).join(' ') || 'No model details'}
+                                <View style={styles.machineRowTop}>
+                                  <View style={styles.machineInfo}>
+                                    <Text style={styles.machineName}>{machine.name}</Text>
+                                    <Text style={styles.machineMeta}>
+                                      {[machine.manufacturer, machine.model_number].filter(Boolean).join(' · ') || 'No model details'}
+                                    </Text>
+                                  </View>
+                                  <Text style={[styles.machineStateBadge, selected && styles.machineStateBadgeActive]}>
+                                    {selected ? 'Active' : 'Saved'}
                                   </Text>
                                 </View>
-                                <View style={styles.machineActionStack}>
+                                <View style={styles.machineRowActions}>
                                   <Pressable
                                     onPress={() => selectMachine(machine)}
-                                    style={({ pressed }) => [styles.machineMiniButton, selected && styles.machineMiniButtonActive, pressed && styles.buttonPressed]}
+                                    style={({ pressed }) => [
+                                      styles.machineActionButton,
+                                      selected && styles.machineActionButtonActive,
+                                      pressed && styles.buttonPressed,
+                                    ]}
                                   >
-                                    <Text style={[styles.machineMiniButtonText, selected && styles.machineMiniButtonTextActive]}>
-                                      {selected ? 'Active' : 'Use'}
+                                    <Text style={[styles.machineActionButtonText, selected && styles.machineActionButtonTextActive]}>
+                                      {selected ? 'Using now' : 'Use machine'}
                                     </Text>
                                   </Pressable>
                                   <Pressable
                                     disabled={removeUserMachine.isPending}
                                     onPress={() => removeMachineFromUserList(machine)}
                                     style={({ pressed }) => [
-                                      styles.machineMiniButton,
-                                      styles.machineMiniButtonDanger,
+                                      styles.machineActionButton,
+                                      styles.machineActionButtonDanger,
                                       removeUserMachine.isPending && styles.buttonDisabled,
                                       pressed && styles.buttonPressed,
                                     ]}
                                   >
-                                    <Text style={styles.machineMiniButtonText}>{removeUserMachine.isPending ? 'Removing' : 'Remove'}</Text>
+                                    <Text style={styles.machineActionButtonText}>{removeUserMachine.isPending ? 'Removing' : 'Remove'}</Text>
                                   </Pressable>
                                 </View>
                               </View>
@@ -2382,8 +2552,8 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
                           })}
                         </View>
                       ) : (
-                        <View style={styles.stateBox}>
-                          <Text style={styles.stateText}>No saved machines yet. Add one from the catalog.</Text>
+                        <View style={styles.dashboardStateBox}>
+                          <Text style={styles.dashboardStateText}>No saved machines yet</Text>
                         </View>
                       )}
 
@@ -2395,14 +2565,13 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
               ) : null}
 
               {page === 'history' ? (
-                <View>
+                <View style={styles.contentScreen}>
                   <View style={styles.pageTitleRow}>
                     <Text style={[styles.sectionTitle, styles.pageTitle]}>Scan history</Text>
                     <Pressable onPress={() => setPage('dashboard')} style={({ pressed }) => [styles.pageBackButton, pressed && styles.buttonPressed]}>
                       <Text style={styles.pageBackText}>Back to Dashboard</Text>
                     </Pressable>
                   </View>
-                  <Text style={styles.helperText}>All scanned diagnoses are listed here from newest to oldest. Open any record to review its overview.</Text>
 
                   {diagnosisHistoryQuery.isLoading ? (
                     <View style={styles.stateBox}>
@@ -2452,14 +2621,13 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
               ) : null}
 
               {page === 'diagnosis' && diagnosisStep === 'upload' ? (
-                <View>
+                <View style={styles.contentScreen}>
                   <View style={styles.pageTitleRow}>
                     <Text style={[styles.sectionTitle, styles.pageTitle]}>Upload screenshot</Text>
                     <Pressable onPress={() => setPage('dashboard')} style={({ pressed }) => [styles.pageBackButton, pressed && styles.buttonPressed]}>
                       <Text style={styles.pageBackText}>Back to Dashboard</Text>
                     </Pressable>
                   </View>
-                  <Text style={styles.helperText}>The image is checked for resolution and blur before it is sent to Gemini.</Text>
 
                   {selectedImage ? (
                     <RNImage source={{ uri: selectedImage.uri }} resizeMode="cover" style={styles.previewImage} />
@@ -2517,14 +2685,13 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
               ) : null}
 
               {page === 'diagnosis' && diagnosisStep === 'confirm' ? (
-                <View>
+                <View style={styles.contentScreen}>
                   <View style={styles.pageTitleRow}>
                     <Text style={[styles.sectionTitle, styles.pageTitle]}>Confirm detected codes</Text>
                     <Pressable onPress={() => setPage('dashboard')} style={({ pressed }) => [styles.pageBackButton, pressed && styles.buttonPressed]}>
                       <Text style={styles.pageBackText}>Back to Dashboard</Text>
                     </Pressable>
                   </View>
-                  <Text style={styles.helperText}>Correct the module or code list when the OCR result is wrong.</Text>
 
                   {confirmScreenshotSource ? <ScreenshotViewer source={confirmScreenshotSource} /> : null}
 
@@ -2586,7 +2753,7 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
               ) : null}
 
               {page === 'diagnosis' && diagnosisStep === 'result' ? (
-                <View>
+                <View style={styles.contentScreen}>
                   <View style={styles.pageTitleRow}>
                     <Text style={[styles.sectionTitle, styles.pageTitle]}>Error preview</Text>
                     <Pressable onPress={() => setPage('dashboard')} style={({ pressed }) => [styles.pageBackButton, pressed && styles.buttonPressed]}>
@@ -2607,14 +2774,13 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
               ) : null}
 
               {page === 'history-detail' ? (
-                <View>
+                <View style={styles.contentScreen}>
                   <View style={styles.pageTitleRow}>
                     <Text style={[styles.sectionTitle, styles.pageTitle]}>Scan overview</Text>
                     <Pressable onPress={() => setPage('history')} style={({ pressed }) => [styles.pageBackButton, pressed && styles.buttonPressed]}>
                       <Text style={styles.pageBackText}>Back to History</Text>
                     </Pressable>
                   </View>
-                  <Text style={styles.helperText}>This is a read-only overview of the selected scan, including the uploaded screenshot and matched documentation.</Text>
 
                   {diagnosis.isLoading ? (
                     <View style={styles.stateBox}>
@@ -2644,7 +2810,6 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
                 <Text style={styles.pageBackText}>Close</Text>
               </Pressable>
             </View>
-            <Text style={styles.helperText}>Search the configured machine catalog by machine name, manufacturer, or model.</Text>
 
             <View style={styles.modalInputGroup}>
               <Text style={styles.inputLabel}>Search catalog</Text>
@@ -2660,11 +2825,7 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
             </View>
 
             <View style={styles.modalResultArea}>
-              {trimmedMachineSearch.length < 2 ? (
-                <View style={styles.modalMessageBox}>
-                  <Text style={styles.modalMessageText}>Enter at least 2 characters to search.</Text>
-                </View>
-              ) : machines.isLoading || machines.isFetching ? (
+              {machines.isLoading && !machines.data ? (
                 <View style={[styles.modalMessageBox, styles.modalLoadingBox]}>
                   <ActivityIndicator color="#8fb7ff" />
                   <Text style={styles.modalMessageText}>Searching machines</Text>
@@ -2674,25 +2835,38 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
                   <Text style={styles.error}>Machine search is not reachable at {apiBaseUrl}</Text>
                 </View>
               ) : addableMachines.length > 0 ? (
-                <ScrollView contentContainerStyle={styles.modalResultList} keyboardShouldPersistTaps="handled" style={styles.modalResultViewport}>
-                  {addableMachines.map((machine) => (
-                    <View key={machine.id} style={styles.machineRow}>
-                      <View style={styles.machineInfo}>
-                        <Text style={styles.machineName}>{machine.name}</Text>
-                        <Text style={styles.machineMeta}>
-                          {[machine.manufacturer, machine.model_number].filter(Boolean).join(' ') || 'No model details'}
-                        </Text>
+                <View style={styles.modalResultStack}>
+                  <ScrollView
+                    contentContainerStyle={styles.modalResultList}
+                    keyboardShouldPersistTaps="handled"
+                    style={[styles.modalResultViewport, machines.isFetching && styles.modalResultViewportLoading]}
+                  >
+                    {addableMachines.map((machine) => (
+                      <View key={machine.id} style={styles.machineRow}>
+                        <View style={styles.machineRowTop}>
+                          <View style={styles.machineInfo}>
+                            <Text style={styles.machineName}>{machine.name}</Text>
+                            <Text style={styles.machineMeta}>
+                              {[machine.manufacturer, machine.model_number].filter(Boolean).join(' · ') || 'No model details'}
+                            </Text>
+                          </View>
+                        </View>
+                        <Pressable
+                          disabled={addUserMachine.isPending}
+                          onPress={() => addMachineToUserList(machine)}
+                          style={({ pressed }) => [styles.machineActionButton, addUserMachine.isPending && styles.buttonDisabled, pressed && styles.buttonPressed]}
+                        >
+                          <Text style={styles.machineActionButtonText}>{addUserMachine.isPending ? 'Adding' : 'Add machine'}</Text>
+                        </Pressable>
                       </View>
-                      <Pressable
-                        disabled={addUserMachine.isPending}
-                        onPress={() => addMachineToUserList(machine)}
-                        style={({ pressed }) => [styles.machineMiniButton, addUserMachine.isPending && styles.buttonDisabled, pressed && styles.buttonPressed]}
-                      >
-                        <Text style={styles.machineMiniButtonText}>{addUserMachine.isPending ? 'Adding' : 'Add'}</Text>
-                      </Pressable>
+                    ))}
+                  </ScrollView>
+                  {machines.isFetching ? (
+                    <View pointerEvents="none" style={styles.modalLoadingOverlay}>
+                      <ActivityIndicator color="#8fb7ff" />
                     </View>
-                  ))}
-                </ScrollView>
+                  ) : null}
+                </View>
               ) : (
                 <View style={styles.modalMessageBox}>
                   <Text style={styles.modalMessageText}>
@@ -2940,6 +3114,9 @@ const styles = StyleSheet.create({
     minHeight: '100%',
     width: '100%',
   },
+  dashboardShell: {
+    maxWidth: 620,
+  },
   loginShell: {
     alignSelf: 'center',
     maxWidth: 520,
@@ -2956,6 +3133,35 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.34,
     shadowRadius: 42,
     elevation: 14,
+  },
+  appToolbar: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(26, 28, 35, 0.82)',
+    borderBottomColor: 'rgba(255, 255, 255, 0.1)',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+    minHeight: 56,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  appToolbarCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  appToolbarLabel: {
+    color: '#8fb7ff',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+  },
+  appToolbarTitle: {
+    color: '#f7f8fb',
+    fontSize: 18,
+    fontWeight: '900',
+    letterSpacing: 0,
   },
   loginWindow: {
     backgroundColor: 'rgba(20, 22, 29, 0.72)',
@@ -3179,6 +3385,9 @@ const styles = StyleSheet.create({
     shadowRadius: 28,
     elevation: 12,
   },
+  dashboardStepCard: {
+    padding: 14,
+  },
   loginPanel: {
     backgroundColor: 'rgba(22, 24, 31, 0.62)',
     borderBottomLeftRadius: 8,
@@ -3215,67 +3424,228 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     lineHeight: 20,
   },
-  dashboardGrid: {
-    gap: 12,
-    marginTop: 16,
+  dashboardScreen: {
+    gap: 16,
   },
-  dashboardCard: {
+  dashboardHeroCard: {
+    alignItems: 'flex-start',
     backgroundColor: 'rgba(255, 255, 255, 0.045)',
     borderColor: 'rgba(255, 255, 255, 0.12)',
     borderRadius: 8,
     borderWidth: 1,
-    gap: 14,
-    padding: 14,
-    shadowColor: '#000000',
-    shadowOffset: { height: 10, width: 0 },
-    shadowOpacity: 0.18,
-    shadowRadius: 18,
-  },
-  dashboardCardHeader: {
-    alignItems: 'flex-start',
     flexDirection: 'row',
-    justifyContent: 'space-between',
     gap: 12,
+    justifyContent: 'space-between',
+    minHeight: 84,
+    padding: 14,
   },
-  dashboardKicker: {
+  dashboardHeroCopy: {
+    flex: 1,
+    gap: 4,
+    paddingRight: 6,
+  },
+  dashboardHeroLabel: {
     color: '#8fb7ff',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '900',
     letterSpacing: 0,
     textTransform: 'uppercase',
   },
-  dashboardTitle: {
+  dashboardHeroTitle: {
     color: '#f7f8fb',
-    fontSize: 21,
+    fontSize: 20,
     fontWeight: '900',
     letterSpacing: 0,
-    lineHeight: 26,
-    marginTop: 3,
+    lineHeight: 24,
   },
-  dashboardStatus: {
+  dashboardHeroMeta: {
+    color: '#aeb6c6',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 18,
+  },
+  dashboardHeroBadge: {
     backgroundColor: 'rgba(255, 255, 255, 0.055)',
     borderColor: 'rgba(255, 255, 255, 0.14)',
     borderRadius: 8,
     borderWidth: 1,
     color: '#b8bfcc',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '900',
     letterSpacing: 0,
     overflow: 'hidden',
-    paddingHorizontal: 9,
-    paddingVertical: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
     textTransform: 'uppercase',
   },
-  dashboardStatusActive: {
+  dashboardHeroBadgeActive: {
     backgroundColor: 'rgba(143, 183, 255, 0.12)',
     borderColor: 'rgba(143, 183, 255, 0.34)',
     color: '#c7d8ff',
   },
-  dashboardText: {
-    color: '#c4cad6',
-    fontSize: 14,
+  dashboardActionGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  dashboardActionTile: {
+    backgroundColor: 'rgba(255, 255, 255, 0.045)',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 8,
+    minHeight: 120,
+    padding: 14,
+    width: '48.5%',
+  },
+  dashboardActionTileFullWidth: {
+    width: '100%',
+  },
+  dashboardActionTilePrimary: {
+    backgroundColor: 'rgba(143, 183, 255, 0.16)',
+    borderColor: 'rgba(143, 183, 255, 0.42)',
+  },
+  dashboardActionTileWarning: {
+    backgroundColor: 'rgba(255, 214, 102, 0.1)',
+    borderColor: 'rgba(255, 214, 102, 0.24)',
+  },
+  dashboardActionTileDisabled: {
+    opacity: 0.72,
+  },
+  dashboardActionLabel: {
+    color: '#8fb7ff',
+    fontSize: 11,
+    fontWeight: '900',
     letterSpacing: 0,
-    lineHeight: 20,
+    textTransform: 'uppercase',
+  },
+  dashboardActionLabelPrimary: {
+    color: '#d9e6ff',
+  },
+  dashboardActionValue: {
+    color: '#f7f8fb',
+    fontSize: 22,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 26,
+  },
+  dashboardActionValuePrimary: {
+    color: '#ffffff',
+  },
+  dashboardActionValueDisabled: {
+    color: '#d7dce6',
+  },
+  dashboardActionMeta: {
+    color: '#aeb6c6',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 18,
+  },
+  dashboardActionMetaPrimary: {
+    color: '#edf3ff',
+  },
+  dashboardActionMetaDisabled: {
+    color: '#b2b9c6',
+  },
+  dashboardSection: {
+    gap: 10,
+  },
+  dashboardSectionHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  dashboardSectionTitle: {
+    color: '#f7f8fb',
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  dashboardInlineLink: {
+    alignItems: 'center',
+    minHeight: 32,
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  dashboardInlineLinkText: {
+    color: '#8fb7ff',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  dashboardList: {
+    gap: 10,
+  },
+  dashboardHistoryRow: {
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 6,
+    minHeight: 78,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  dashboardHistoryRowTop: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'space-between',
+  },
+  dashboardHistoryRowMachine: {
+    color: '#f7f8fb',
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '800',
+    letterSpacing: 0,
+  },
+  dashboardHistoryRowStatus: {
+    backgroundColor: 'rgba(255, 255, 255, 0.055)',
+    borderColor: 'rgba(255, 255, 255, 0.14)',
+    borderRadius: 8,
+    borderWidth: 1,
+    color: '#c4cad6',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    textTransform: 'uppercase',
+  },
+  dashboardHistoryRowStatusResolved: {
+    backgroundColor: 'rgba(102, 224, 173, 0.12)',
+    borderColor: 'rgba(102, 224, 173, 0.32)',
+    color: '#b9f0d5',
+  },
+  dashboardHistoryRowStatusNeedsCheck: {
+    backgroundColor: 'rgba(143, 183, 255, 0.12)',
+    borderColor: 'rgba(143, 183, 255, 0.32)',
+    color: '#d1e0ff',
+  },
+  dashboardHistoryRowStatusPending: {
+    backgroundColor: 'rgba(255, 214, 102, 0.12)',
+    borderColor: 'rgba(255, 214, 102, 0.28)',
+    color: '#ffe6a3',
+  },
+  dashboardHistoryRowStatusFailed: {
+    backgroundColor: 'rgba(255, 107, 61, 0.12)',
+    borderColor: 'rgba(255, 107, 61, 0.3)',
+    color: '#ffc1ae',
+  },
+  dashboardHistoryRowCode: {
+    color: '#f7f8fb',
+    fontSize: 18,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  dashboardHistoryRowMeta: {
+    color: '#99a3b5',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0,
   },
   dashboardStateBox: {
     alignItems: 'center',
@@ -3293,6 +3663,56 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     lineHeight: 20,
     textAlign: 'center',
+  },
+  contentScreen: {
+    gap: 16,
+  },
+  machinesScreen: {
+    gap: 16,
+  },
+  machinesHeroCard: {
+    alignItems: 'flex-start',
+    backgroundColor: 'rgba(255, 255, 255, 0.045)',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+    minHeight: 84,
+    padding: 14,
+  },
+  machinesHeroCopy: {
+    flex: 1,
+    gap: 4,
+    paddingRight: 6,
+  },
+  machinesHeroTitle: {
+    color: '#f7f8fb',
+    fontSize: 20,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 24,
+  },
+  machinesHeroMeta: {
+    color: '#aeb6c6',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 18,
+  },
+  machinesSectionBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.055)',
+    borderColor: 'rgba(255, 255, 255, 0.14)',
+    borderRadius: 8,
+    borderWidth: 1,
+    color: '#c4cad6',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
   },
   subsectionTitle: {
     color: '#d9dde8',
@@ -3461,17 +3881,14 @@ const styles = StyleSheet.create({
   },
   machineList: {
     gap: 10,
-    marginTop: 16,
   },
   machineRow: {
-    alignItems: 'center',
     backgroundColor: 'rgba(255, 255, 255, 0.052)',
     borderColor: 'rgba(255, 255, 255, 0.13)',
     borderRadius: 8,
     borderWidth: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    minHeight: 74,
+    gap: 12,
+    minHeight: 92,
     paddingHorizontal: 14,
     paddingVertical: 12,
     shadowColor: '#000000',
@@ -3484,9 +3901,16 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(143, 183, 255, 0.82)',
     borderWidth: 2,
   },
+  machineRowTop: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+  },
   machineInfo: {
     flex: 1,
-    paddingRight: 12,
+    gap: 3,
+    paddingRight: 8,
   },
   machineName: {
     color: '#f7f8fb',
@@ -3495,40 +3919,62 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
   },
   machineMeta: {
-    color: '#b8b2a5',
-    fontSize: 14,
+    color: '#aeb6c6',
+    fontSize: 13,
+    fontWeight: '700',
     letterSpacing: 0,
-    marginTop: 3,
+    lineHeight: 18,
   },
-  machineActionStack: {
-    alignItems: 'flex-end',
-    gap: 7,
+  machineStateBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.055)',
+    borderColor: 'rgba(255, 255, 255, 0.14)',
+    borderRadius: 8,
+    borderWidth: 1,
+    color: '#c4cad6',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0,
+    overflow: 'hidden',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    textTransform: 'uppercase',
   },
-  machineMiniButton: {
+  machineStateBadgeActive: {
+    backgroundColor: 'rgba(143, 183, 255, 0.12)',
+    borderColor: 'rgba(143, 183, 255, 0.32)',
+    color: '#d1e0ff',
+  },
+  machineRowActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  machineActionButton: {
     alignItems: 'center',
     backgroundColor: 'rgba(255, 255, 255, 0.055)',
     borderColor: 'rgba(255, 255, 255, 0.16)',
     borderRadius: 8,
     borderWidth: 1,
-    minWidth: 74,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 44,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
-  machineMiniButtonActive: {
+  machineActionButtonActive: {
     backgroundColor: 'rgba(143, 183, 255, 0.13)',
     borderColor: 'rgba(143, 183, 255, 0.42)',
   },
-  machineMiniButtonDanger: {
+  machineActionButtonDanger: {
     borderColor: 'rgba(255, 107, 61, 0.3)',
   },
-  machineMiniButtonText: {
+  machineActionButtonText: {
     color: '#d9dde8',
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '900',
     letterSpacing: 0,
     textTransform: 'uppercase',
   },
-  machineMiniButtonTextActive: {
+  machineActionButtonTextActive: {
     color: '#c7d8ff',
   },
   selectLabel: {
@@ -4270,9 +4716,26 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     maxHeight: 360,
   },
+  modalResultStack: {
+    position: 'relative',
+  },
+  modalResultViewportLoading: {
+    opacity: 0.34,
+  },
   modalResultList: {
     gap: 10,
     paddingBottom: 4,
+  },
+  modalLoadingOverlay: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(8, 10, 16, 0.18)',
+    borderRadius: 8,
+    bottom: 0,
+    justifyContent: 'center',
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
   },
   modalMessageBox: {
     alignItems: 'flex-start',
