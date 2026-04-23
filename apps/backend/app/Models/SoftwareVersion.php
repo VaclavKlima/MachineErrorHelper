@@ -5,7 +5,6 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class SoftwareVersion extends Model
 {
@@ -30,10 +29,5 @@ class SoftwareVersion extends Model
     public function machine(): BelongsTo
     {
         return $this->belongsTo(Machine::class);
-    }
-
-    public function manuals(): HasMany
-    {
-        return $this->hasMany(Manual::class);
     }
 }

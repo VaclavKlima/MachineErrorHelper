@@ -13,9 +13,6 @@ class ManualInfolist
             ->components([
                 TextEntry::make('machine.name')
                     ->label('Machine'),
-                TextEntry::make('softwareVersion.id')
-                    ->label('Software version')
-                    ->placeholder('-'),
                 TextEntry::make('title'),
                 TextEntry::make('coverage_mode'),
                 TextEntry::make('language'),

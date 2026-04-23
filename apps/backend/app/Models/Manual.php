@@ -13,7 +13,6 @@ class Manual extends Model
 
     protected $fillable = [
         'machine_id',
-        'software_version_id',
         'title',
         'coverage_mode',
         'language',
@@ -36,11 +35,6 @@ class Manual extends Model
     public function machine(): BelongsTo
     {
         return $this->belongsTo(Machine::class);
-    }
-
-    public function softwareVersion(): BelongsTo
-    {
-        return $this->belongsTo(SoftwareVersion::class);
     }
 
     public function importRuns(): HasMany

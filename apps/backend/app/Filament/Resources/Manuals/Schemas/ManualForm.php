@@ -18,9 +18,6 @@ class ManualForm
                 Select::make('machine_id')
                     ->relationship('machine', 'name')
                     ->required(),
-                Select::make('software_version_id')
-                    ->relationship('softwareVersion', 'version')
-                    ->label('Software version'),
                 TextInput::make('title')
                     ->required(),
                 Select::make('coverage_mode')

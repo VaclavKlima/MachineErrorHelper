@@ -6,6 +6,7 @@ use App\Filament\Resources\Manuals\Pages\CreateManual;
 use App\Filament\Resources\Manuals\Pages\EditManual;
 use App\Filament\Resources\Manuals\Pages\ListManuals;
 use App\Filament\Resources\Manuals\Pages\ViewManual;
+use App\Filament\Resources\Manuals\RelationManagers\ErrorCodesRelationManager;
 use App\Filament\Resources\Manuals\Schemas\ManualForm;
 use App\Filament\Resources\Manuals\Schemas\ManualInfolist;
 use App\Filament\Resources\Manuals\Tables\ManualsTable;
@@ -44,7 +45,7 @@ class ManualResource extends Resource
     public static function getRelations(): array
     {
         return [
-            //
+            ErrorCodesRelationManager::class,
         ];
     }
 

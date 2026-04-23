@@ -18,45 +18,44 @@ class ManualsTable
     public static function configure(Table $table): Table
     {
         return $table
+            ->defaultSort('created_at', 'desc')
             ->columns([
                 TextColumn::make('machine.name')
-                    ->searchable(),
-                TextColumn::make('softwareVersion.id')
+                    ->label('Machine')
                     ->searchable(),
                 TextColumn::make('title')
+                    ->label('Manual')
                     ->searchable(),
                 TextColumn::make('coverage_mode')
-                    ->searchable(),
+                    ->label('Coverage')
+                    ->badge()
+                    ->formatStateUsing(fn (string $state): string => match ($state) {
+                        'complete' => 'Complete',
+                        'delta' => 'Delta',
+                        'supplement' => 'Supplement',
+                        default => ucfirst($state),
+                    }),
                 TextColumn::make('language')
-                    ->searchable(),
-                TextColumn::make('file_path')
-                    ->searchable(),
-                TextColumn::make('file_hash')
-                    ->searchable(),
-                TextColumn::make('page_count')
-                    ->numeric()
-                    ->sortable(),
-                TextColumn::make('published_at')
-                    ->dateTime()
-                    ->sortable(),
+                    ->badge()
+                    ->formatStateUsing(fn (string $state): string => match ($state) {
+                        'cs' => 'CZ',
+                        'en' => 'EN',
+                        default => strtoupper($state),
+                    }),
                 TextColumn::make('status')
+                    ->badge()
+                    ->color(fn (string $state): string => match ($state) {
+                        'extracted' => 'success',
+                        'failed' => 'danger',
+                        'processing' => 'warning',
+                        'queued' => 'warning',
+                        default => 'gray',
+                    })
                     ->searchable(),
-                TextColumn::make('pages_count')
-                    ->counts('pages')
-                    ->label('Extracted pages')
-                    ->sortable(),
-                TextColumn::make('extraction_candidates_count')
-                    ->counts('extractionCandidates')
-                    ->label('Extracted codes')
-                    ->sortable(),
                 TextColumn::make('created_at')
                     ->dateTime()
                     ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
-                TextColumn::make('updated_at')
-                    ->dateTime()
-                    ->sortable()
-                    ->toggleable(isToggledHiddenByDefault: true),
+                    ->label('Uploaded'),
             ])
             ->filters([
                 //

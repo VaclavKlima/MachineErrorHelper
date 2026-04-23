@@ -10,8 +10,8 @@ use App\Models\User;
 use App\Services\ScreenshotDiagnosticExtractionService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
@@ -139,7 +139,15 @@ class ScanHistoryAdminTest extends TestCase
         $this->actingAs($admin)
             ->get('/admin/diagnosis-requests')
             ->assertOk()
-            ->assertSee('Scan history');
+            ->assertSee('Scan history')
+            ->assertSee('Codes')
+            ->assertSee('Resolved')
+            ->assertSee('State')
+            ->assertSee('Scanned')
+            ->assertDontSee('AI codes')
+            ->assertDontSee('Entered codes')
+            ->assertDontSee('Confidence')
+            ->assertDontSee('Scan ID');
 
         $this->actingAs($admin)
             ->get('/admin/diagnosis-requests/'.$diagnosis->public_id)
