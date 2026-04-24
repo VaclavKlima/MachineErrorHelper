@@ -52,14 +52,32 @@ Still placeholder:
 
 ## Quick Start
 
-Build and start the full local stack:
+Build and start the full local development stack:
 
 ```bash
-sudo docker compose build backend
-sudo docker compose up -d
-sudo docker compose exec backend php artisan migrate
-sudo docker compose exec backend php artisan make:filament-user
+docker compose up -d --build
+docker compose exec backend php artisan admin:create-default-user
 ```
+
+On startup, the `backend-init` service automatically:
+
+- copies `apps/backend/.env.example` to `.env` when needed
+- installs backend Composer dependencies
+- installs backend frontend dependencies and builds Vite assets
+- generates the Laravel app key when missing
+- clears Laravel caches
+- runs database migrations
+
+If you switch branches or need to rerun the backend bootstrap manually, run:
+
+```bash
+docker compose run --rm backend-init
+```
+
+The default local admin account created by the command above is:
+
+- Email: `admin@example.com`
+- Password: `password`
 
 Useful local URLs:
 
@@ -75,7 +93,7 @@ Manuals can be uploaded from the Filament admin under `Manuals`. After upload, u
 Local PDFs can also be imported from the root `assets/manuals` folder:
 
 ```bash
-sudo docker compose exec backend php artisan manuals:import "assets/manuals/error verze 1.72.0 (CZE)-1.pdf" --machine=1 --title="Error codes 1.72.0 CZE" --language=cs
+docker compose exec backend php artisan manuals:import "assets/manuals/error verze 1.72.0 (CZE)-1.pdf" --machine=1 --title="Error codes 1.72.0 CZE" --language=cs
 ```
 
 The importer currently uses Poppler `pdftotext` and deterministic table-row detection. Extraction output goes into `Review suggestions`; approved error codes are created only when an admin reviews and approves a suggestion.

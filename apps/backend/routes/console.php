@@ -1,9 +1,12 @@
 <?php
 
 use App\Models\Machine;
+use App\Models\User;
 use App\Services\ManualImportService;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
+use Spatie\Permission\Models\Role;
 
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
@@ -54,3 +57,67 @@ Artisan::command('manuals:import {path : PDF path, relative to repo root or back
 
     return 0;
 })->purpose('Import a local PDF manual, extract text pages/chunks, and publish active error-code definitions');
+
+Artisan::command('admin:create-default-user {--name= : Admin display name} {--email= : Admin email address} {--password= : Admin password}', function () {
+    $isLocalBootstrap = app()->isLocal() || app()->runningUnitTests();
+
+    $name = $this->option('name') ?: ($isLocalBootstrap ? 'Admin' : null);
+    $email = $this->option('email') ?: ($isLocalBootstrap ? 'admin@example.com' : null);
+    $password = $this->option('password') ?: ($isLocalBootstrap ? 'password' : null);
+
+    if (! $name && $this->input->isInteractive()) {
+        $name = $this->ask('Admin name');
+    }
+
+    if (! $email && $this->input->isInteractive()) {
+        $email = $this->ask('Admin email');
+    }
+
+    if (! $password && $this->input->isInteractive()) {
+        $password = $this->secret('Admin password');
+    }
+
+    if (! $name || ! $email || ! $password) {
+        $this->error('Pass --name, --email, and --password, or run the command locally to use the development defaults.');
+
+        return 1;
+    }
+
+    if (! filter_var($email, FILTER_VALIDATE_EMAIL)) {
+        $this->error('The admin email must be a valid email address.');
+
+        return 1;
+    }
+
+    Role::findOrCreate('admin', 'web');
+
+    $existingUser = User::query()->where('email', $email)->first();
+
+    $user = DB::transaction(function () use ($existingUser, $name, $email, $password): User {
+        $user = $existingUser ?? new User();
+
+        $user->fill([
+            'name' => $name,
+            'email' => $email,
+            'password' => $password,
+        ]);
+
+        if (! $user->email_verified_at) {
+            $user->email_verified_at = now();
+        }
+
+        $user->save();
+        $user->syncRoles(['admin']);
+
+        return $user->fresh();
+    });
+
+    $this->info(($existingUser ? 'Updated' : 'Created')." admin user #{$user->id}.");
+    $this->line("Email: {$user->email}");
+
+    if ($isLocalBootstrap && $password === 'password') {
+        $this->warn('Local development default password: password');
+    }
+
+    return 0;
+})->purpose('Create or update an admin user with the admin role required for Filament access');
