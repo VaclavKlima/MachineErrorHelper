@@ -850,8 +850,16 @@ function ScreenshotViewer({ source }: { source: ScreenshotPreviewSource }) {
           </Pressable>
         </View>
 
-        <Pressable onPress={openViewer} style={({ pressed }) => [styles.screenshotPreviewFrame, pressed && styles.buttonPressed]}>
+        <Pressable
+          accessibilityHint="Open uploaded image in full screen"
+          accessibilityRole="button"
+          onPress={openViewer}
+          style={({ pressed }) => [styles.screenshotPreviewFrame, pressed && styles.buttonPressed]}
+        >
           <RNImage source={{ uri: source.uri }} resizeMode="contain" style={[styles.screenshotPreviewImage, { height: previewHeight }]} />
+          <View style={styles.screenshotPreviewFooter}>
+            <PressableCue label="Tap to zoom" />
+          </View>
         </Pressable>
       </View>
 
@@ -1641,9 +1649,19 @@ function HistoryOverviewPanel({
   );
 }
 
+function PressableCue({ label }: { label: string }) {
+  return (
+    <View style={styles.pressableCue}>
+      <Text style={styles.pressableCueText}>{label}</Text>
+      <Text style={styles.pressableCueArrow}>›</Text>
+    </View>
+  );
+}
+
 function DashboardActionTile({
   disabled = false,
   fullWidth = false,
+  hint = 'Open',
   label,
   meta,
   onPress,
@@ -1652,6 +1670,7 @@ function DashboardActionTile({
 }: {
   disabled?: boolean;
   fullWidth?: boolean;
+  hint?: string;
   label: string;
   meta: string;
   onPress: () => void;
@@ -1661,6 +1680,7 @@ function DashboardActionTile({
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityHint={hint}
       disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
@@ -1693,6 +1713,9 @@ function DashboardActionTile({
       >
         {meta}
       </Text>
+      <View style={styles.dashboardActionFooter}>
+        <PressableCue label={hint} />
+      </View>
     </Pressable>
   );
 }
@@ -1705,7 +1728,12 @@ function DashboardHistoryRow({
   onPress: (item: DiagnosisHistoryItem) => void;
 }) {
   return (
-    <Pressable onPress={() => onPress(item)} style={({ pressed }) => [styles.dashboardHistoryRow, pressed && styles.buttonPressed]}>
+    <Pressable
+      accessibilityHint="Open scan overview"
+      accessibilityRole="button"
+      onPress={() => onPress(item)}
+      style={({ pressed }) => [styles.dashboardHistoryRow, pressed && styles.buttonPressed]}
+    >
       <View style={styles.dashboardHistoryRowTop}>
         <Text numberOfLines={1} style={styles.dashboardHistoryRowMachine}>
           {item.machine?.name ?? 'Unknown machine'}
@@ -1725,9 +1753,12 @@ function DashboardHistoryRow({
       <Text numberOfLines={1} style={styles.dashboardHistoryRowCode}>
         {historyCodesLabel(item)}
       </Text>
-      <Text numberOfLines={1} style={styles.dashboardHistoryRowMeta}>
-        {formatHistoryTimestamp(item.created_at)}
-      </Text>
+      <View style={styles.dashboardHistoryRowFooter}>
+        <Text numberOfLines={1} style={styles.dashboardHistoryRowMeta}>
+          {formatHistoryTimestamp(item.created_at)}
+        </Text>
+        <PressableCue label="Open scan" />
+      </View>
     </Pressable>
   );
 }
@@ -2409,6 +2440,7 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
 
                   <View style={styles.dashboardActionGrid}>
                     <DashboardActionTile
+                      hint={selectedMachine ? 'Open scan flow' : 'Select a machine'}
                       label="Scan"
                       meta={selectedMachine ? 'Take photo or upload' : 'Choose machine first'}
                       onPress={beginScan}
@@ -2416,6 +2448,7 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
                       value={selectedMachine ? 'Start' : 'Select'}
                     />
                     <DashboardActionTile
+                      hint="Manage machines"
                       label="Machines"
                       meta={selectedMachine ? 'Active machine saved' : 'Manage machine list'}
                       onPress={() => setPage('machines')}
@@ -2423,6 +2456,7 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
                     />
                     <DashboardActionTile
                       fullWidth
+                      hint="Review scans"
                       label="History"
                       meta="All scans"
                       onPress={openDiagnosisHistory}
@@ -2586,6 +2620,8 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
                     <View style={styles.scanHistoryList}>
                       {diagnosisHistory.map((item) => (
                         <Pressable
+                          accessibilityHint="Open scan overview"
+                          accessibilityRole="button"
                           key={item.id}
                           onPress={() => openDiagnosisHistoryItem(item)}
                           style={({ pressed }) => [styles.scanHistoryRow, pressed && styles.buttonPressed]}
@@ -2593,7 +2629,6 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
                           <View style={styles.scanHistoryRowHeader}>
                             <View style={styles.scanHistoryCopy}>
                               <Text style={styles.scanHistoryMachine}>{item.machine?.name ?? 'Unknown machine'}</Text>
-                              <Text style={styles.scanHistoryMeta}>{formatHistoryTimestamp(item.created_at)}</Text>
                             </View>
                             <Text
                               style={[
@@ -2609,6 +2644,12 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
                           </View>
                           <Text style={styles.scanHistoryCodes}>{historyCodesLabel(item)}</Text>
                           {historyMatchLabel(item) ? <Text style={styles.scanHistoryMatch}>{historyMatchLabel(item)}</Text> : null}
+                          <View style={styles.scanHistoryRowFooter}>
+                            <Text numberOfLines={1} style={styles.scanHistoryMeta}>
+                              {formatHistoryTimestamp(item.created_at)}
+                            </Text>
+                            <PressableCue label="Open scan" />
+                          </View>
                         </Pressable>
                       ))}
                     </View>
@@ -3372,21 +3413,11 @@ const styles = StyleSheet.create({
     color: '#f7f8fb',
   },
   stepCard: {
-    backgroundColor: 'rgba(22, 24, 31, 0.66)',
-    borderColor: 'rgba(255, 255, 255, 0.13)',
-    borderRadius: 8,
-    borderWidth: 1,
-    margin: 18,
-    overflow: 'hidden',
+    margin: 0,
     padding: 16,
-    shadowColor: '#000000',
-    shadowOffset: { height: 18, width: 0 },
-    shadowOpacity: 0.24,
-    shadowRadius: 28,
-    elevation: 12,
   },
   dashboardStepCard: {
-    padding: 14,
+    padding: 18,
   },
   loginPanel: {
     backgroundColor: 'rgba(22, 24, 31, 0.62)',
@@ -3429,15 +3460,17 @@ const styles = StyleSheet.create({
   },
   dashboardHeroCard: {
     alignItems: 'flex-start',
-    backgroundColor: 'rgba(255, 255, 255, 0.045)',
-    borderColor: 'rgba(255, 255, 255, 0.12)',
+    backgroundColor: 'rgba(255, 255, 255, 0.028)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     borderRadius: 8,
     borderWidth: 1,
+    borderLeftColor: 'rgba(143, 183, 255, 0.34)',
+    borderLeftWidth: 3,
     flexDirection: 'row',
     gap: 12,
     justifyContent: 'space-between',
     minHeight: 84,
-    padding: 14,
+    padding: 16,
   },
   dashboardHeroCopy: {
     flex: 1,
@@ -3490,13 +3523,18 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   dashboardActionTile: {
-    backgroundColor: 'rgba(255, 255, 255, 0.045)',
-    borderColor: 'rgba(255, 255, 255, 0.12)',
+    backgroundColor: 'rgba(15, 18, 26, 0.9)',
+    borderColor: 'rgba(143, 183, 255, 0.24)',
     borderRadius: 8,
     borderWidth: 1,
     gap: 8,
-    minHeight: 120,
+    minHeight: 132,
     padding: 14,
+    shadowColor: '#8fb7ff',
+    shadowOffset: { height: 10, width: 0 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 6,
     width: '48.5%',
   },
   dashboardActionTileFullWidth: {
@@ -3549,6 +3587,36 @@ const styles = StyleSheet.create({
   dashboardActionMetaDisabled: {
     color: '#b2b9c6',
   },
+  dashboardActionFooter: {
+    alignItems: 'flex-start',
+    marginTop: 'auto',
+    paddingTop: 4,
+  },
+  pressableCue: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(143, 183, 255, 0.12)',
+    borderColor: 'rgba(143, 183, 255, 0.34)',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  pressableCueText: {
+    color: '#d7e4ff',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+  },
+  pressableCueArrow: {
+    color: '#d7e4ff',
+    fontSize: 14,
+    fontWeight: '900',
+    lineHeight: 14,
+  },
   dashboardSection: {
     gap: 10,
   },
@@ -3579,14 +3647,19 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   dashboardHistoryRow: {
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: 'rgba(15, 18, 26, 0.88)',
+    borderColor: 'rgba(143, 183, 255, 0.18)',
     borderRadius: 8,
     borderWidth: 1,
     gap: 6,
     minHeight: 78,
     paddingHorizontal: 12,
     paddingVertical: 12,
+    shadowColor: '#8fb7ff',
+    shadowOffset: { height: 8, width: 0 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 4,
   },
   dashboardHistoryRowTop: {
     alignItems: 'center',
@@ -3643,9 +3716,17 @@ const styles = StyleSheet.create({
   },
   dashboardHistoryRowMeta: {
     color: '#99a3b5',
+    flex: 1,
     fontSize: 12,
     fontWeight: '700',
     letterSpacing: 0,
+  },
+  dashboardHistoryRowFooter: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+    marginTop: 2,
   },
   dashboardStateBox: {
     alignItems: 'center',
@@ -3672,15 +3753,17 @@ const styles = StyleSheet.create({
   },
   machinesHeroCard: {
     alignItems: 'flex-start',
-    backgroundColor: 'rgba(255, 255, 255, 0.045)',
-    borderColor: 'rgba(255, 255, 255, 0.12)',
+    backgroundColor: 'rgba(255, 255, 255, 0.028)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     borderRadius: 8,
     borderWidth: 1,
+    borderLeftColor: 'rgba(143, 183, 255, 0.34)',
+    borderLeftWidth: 3,
     flexDirection: 'row',
     gap: 12,
     justifyContent: 'space-between',
     minHeight: 84,
-    padding: 14,
+    padding: 16,
   },
   machinesHeroCopy: {
     flex: 1,
@@ -3752,13 +3835,18 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   scanHistoryRow: {
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: 'rgba(15, 18, 26, 0.88)',
+    borderColor: 'rgba(143, 183, 255, 0.18)',
     borderRadius: 8,
     borderWidth: 1,
     gap: 8,
     paddingHorizontal: 12,
     paddingVertical: 12,
+    shadowColor: '#8fb7ff',
+    shadowOffset: { height: 8, width: 0 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 4,
   },
   scanHistoryRowHeader: {
     alignItems: 'flex-start',
@@ -3778,6 +3866,7 @@ const styles = StyleSheet.create({
   },
   scanHistoryMeta: {
     color: '#9ca5b6',
+    flex: 1,
     fontSize: 12,
     fontWeight: '700',
     letterSpacing: 0,
@@ -3829,16 +3918,23 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     lineHeight: 18,
   },
+  scanHistoryRowFooter: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+    marginTop: 2,
+  },
   scanOverviewStack: {
     gap: 16,
   },
   scanOverviewMetaCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: 'rgba(255, 255, 255, 0.028)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     borderRadius: 8,
     borderWidth: 1,
     gap: 12,
-    padding: 14,
+    padding: 16,
   },
   scanOverviewMetaRow: {
     flexDirection: 'row',
@@ -3883,18 +3979,14 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   machineRow: {
-    backgroundColor: 'rgba(255, 255, 255, 0.052)',
-    borderColor: 'rgba(255, 255, 255, 0.13)',
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    borderColor: 'rgba(255, 255, 255, 0.09)',
     borderRadius: 8,
     borderWidth: 1,
     gap: 12,
     minHeight: 92,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    shadowColor: '#000000',
-    shadowOffset: { height: 8, width: 0 },
-    shadowOpacity: 0.16,
-    shadowRadius: 16,
   },
   machineRowSelected: {
     backgroundColor: 'rgba(143, 183, 255, 0.14)',
@@ -4010,8 +4102,8 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
   },
   screenshotCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: 'rgba(255, 255, 255, 0.028)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     borderRadius: 8,
     borderWidth: 1,
     marginTop: 16,
@@ -4035,16 +4127,29 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   screenshotPreviewFrame: {
-    backgroundColor: 'rgba(7, 8, 14, 0.72)',
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    backgroundColor: 'rgba(7, 8, 14, 0.82)',
+    borderColor: 'rgba(143, 183, 255, 0.22)',
     borderRadius: 8,
     borderWidth: 1,
     marginTop: 12,
     overflow: 'hidden',
+    shadowColor: '#8fb7ff',
+    shadowOffset: { height: 10, width: 0 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 6,
   },
   screenshotPreviewImage: {
     backgroundColor: 'rgba(255, 255, 255, 0.02)',
     width: '100%',
+  },
+  screenshotPreviewFooter: {
+    alignItems: 'flex-end',
+    backgroundColor: 'rgba(255, 255, 255, 0.035)',
+    borderTopColor: 'rgba(255, 255, 255, 0.08)',
+    borderTopWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   actionRow: {
     flexDirection: 'row',
@@ -4246,16 +4351,12 @@ const styles = StyleSheet.create({
     textAlignVertical: 'top',
   },
   resultPanel: {
-    backgroundColor: 'rgba(255, 255, 255, 0.035)',
-    borderColor: 'rgba(255, 255, 255, 0.12)',
+    backgroundColor: 'rgba(255, 255, 255, 0.028)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     borderRadius: 8,
     borderWidth: 1,
     marginTop: 12,
     overflow: 'hidden',
-    shadowColor: '#000000',
-    shadowOffset: { height: 12, width: 0 },
-    shadowOpacity: 0.22,
-    shadowRadius: 22,
   },
   resultHeader: {
     alignItems: 'center',
@@ -4303,8 +4404,8 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   matchCard: {
-    backgroundColor: 'rgba(8, 9, 10, 0.68)',
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: 'rgba(255, 255, 255, 0.024)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     borderRadius: 8,
     borderWidth: 1,
     padding: 12,
@@ -4534,8 +4635,8 @@ const styles = StyleSheet.create({
     paddingTop: 16,
   },
   documentationCard: {
-    backgroundColor: 'rgba(8, 9, 10, 0.68)',
-    borderColor: 'rgba(255, 255, 255, 0.1)',
+    backgroundColor: 'rgba(255, 255, 255, 0.024)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     borderRadius: 8,
     borderWidth: 1,
     padding: 14,
