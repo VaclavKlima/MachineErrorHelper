@@ -18,6 +18,8 @@ return Application::configure(basePath: dirname(__DIR__))
             'app.user' => EnsureAppUser::class,
         ]);
 
+        $middleware->trustProxies(at: '*');
+
         $middleware->redirectGuestsTo(
             fn (Request $request): ?string => $request->is('api/*') ? null : '/admin/login',
         );

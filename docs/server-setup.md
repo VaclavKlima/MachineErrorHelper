@@ -146,7 +146,7 @@ Used by Laravel, workers, scheduler, queues, and admin/API requests.
 | `APP_ENV` | Yes | `testing-server` | Server testing environment name. Do not use Laravel's PHPUnit `.env.testing` here. |
 | `APP_KEY` | Yes | `base64:...` | Generate once and keep stable. Changing it invalidates encrypted data and sessions. |
 | `APP_DEBUG` | Yes | `false` | Keep false on a public subdomain. |
-| `APP_URL` | Yes | `https://testing.example.com` | Public testing URL used for links and storage URLs. |
+| `APP_URL` | Yes | `https://machine.example.com` | Public testing URL used for links, redirects, cookies, and storage URLs. |
 | `LOG_LEVEL` | No | `info` | Use `debug` temporarily when investigating issues. |
 | `DB_CONNECTION` | Yes | `pgsql` | Keep as PostgreSQL. |
 | `DB_HOST` | Yes | `postgres` | Docker service name. |
