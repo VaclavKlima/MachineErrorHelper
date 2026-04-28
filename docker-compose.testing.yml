@@ -35,6 +35,16 @@ services:
     networks:
       - testing
 
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TUNNEL_TOKEN}
+    restart: unless-stopped
+    depends_on:
+      nginx:
+        condition: service_started
+    networks:
+      - testing
+
   worker:
     build:
       context: .

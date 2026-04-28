@@ -78,6 +78,10 @@ check_testing_env() {
   if [ ! -f apps/backend/.env.testing-server ]; then
     fail "apps/backend/.env.testing-server is missing. Copy apps/backend/.env.testing-server.example and edit it before starting testing."
   fi
+
+  if ! grep -Eq '^CLOUDFLARED_TUNNEL_TOKEN=.+$' .env.testing-server; then
+    fail "CLOUDFLARED_TUNNEL_TOKEN is missing in .env.testing-server. Create a Cloudflare Tunnel token before starting testing."
+  fi
 }
 
 prod_compose() {

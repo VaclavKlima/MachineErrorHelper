@@ -6,7 +6,7 @@ This project has three Docker environments:
 - Production server: `docker-compose.prod.yml`
 - Testing server: `docker-compose.testing.yml`
 
-The testing server is intended for a public subdomain through a tunnel, for example `https://testing.example.com`. It uses its own Docker Compose project and volumes, so testing data stays separate from production data.
+The testing server is intended for a public subdomain through a Cloudflare Tunnel, for example `https://testing.example.com`. It uses its own Docker Compose project, Cloudflare connector container, and volumes, so testing data stays separate from production data.
 
 ## Requirements
 
@@ -15,15 +15,29 @@ Install these on the server:
 - Git
 - Docker Engine
 - Docker Compose v2
-- A tunnel or reverse proxy that can forward the testing subdomain to the local testing HTTP port
+- A Cloudflare account with Zero Trust / Tunnels enabled
 
-For a Cloudflare Tunnel, the tunnel target should be:
+The testing Docker stack includes its own `cloudflared` connector container. You do not need to install `cloudflared` directly on the server.
+
+## Cloudflare Tunnel Setup
+
+In Cloudflare Zero Trust:
+
+1. Go to `Networks` -> `Tunnels`.
+2. Create a new tunnel for testing.
+3. Choose the Docker connector option.
+4. Copy the generated tunnel token.
+5. Add a public hostname for the testing subdomain.
+
+For the public hostname service, use:
 
 ```text
-http://127.0.0.1:8092
+http://nginx:80
 ```
 
-Keep the compose port bound to `127.0.0.1` when the tunnel runs on the same server. That prevents the testing app from being exposed directly by server IP.
+That hostname works because the `cloudflared` container and `nginx` container are on the same Docker network.
+
+Keep the compose HTTP port bound to `127.0.0.1`. It is only for direct server debugging. Public traffic should enter through the Cloudflare Tunnel container.
 
 ## First Testing Server Setup
 
@@ -48,6 +62,12 @@ cp apps/backend/.env.testing-server.example apps/backend/.env.testing-server
 
 Edit both files before starting the stack.
 
+In root `.env.testing-server`, set the Cloudflare token:
+
+```env
+CLOUDFLARED_TUNNEL_TOKEN=your-cloudflare-testing-tunnel-token
+```
+
 Generate a Laravel app key:
 
 ```bash
@@ -62,6 +82,8 @@ Start the testing environment:
 chmod +x scripts/testing-up.sh scripts/testing-redeploy.sh
 ./scripts/testing-up.sh
 ```
+
+This starts PostgreSQL, Redis, Laravel PHP-FPM, nginx, workers, scheduler, and the Cloudflare Tunnel connector.
 
 Create the default admin user:
 
@@ -92,6 +114,7 @@ Useful commands:
 ```bash
 docker compose --env-file .env.testing-server -f docker-compose.testing.yml ps
 docker compose --env-file .env.testing-server -f docker-compose.testing.yml logs -f --tail=200
+docker compose --env-file .env.testing-server -f docker-compose.testing.yml logs -f cloudflared
 docker compose --env-file .env.testing-server -f docker-compose.testing.yml exec backend php artisan about
 ```
 
@@ -104,8 +127,9 @@ Used by Docker Compose before containers start.
 | Variable | Required | Example | Notes |
 | --- | --- | --- | --- |
 | `COMPOSE_PROJECT_NAME` | Yes | `machine-error-helper-testing` | Keeps container, network, and volume names separate from production. |
-| `TESTING_HTTP_BIND` | Yes | `127.0.0.1` | Use `127.0.0.1` for Cloudflare Tunnel on the same server. Use `0.0.0.0` only when intentionally exposing the port. |
-| `TESTING_HTTP_PORT` | Yes | `8092` | Local HTTP port that the tunnel forwards to. |
+| `TESTING_HTTP_BIND` | Yes | `127.0.0.1` | Local-only debug bind for nginx. Public traffic uses the `cloudflared` container. |
+| `TESTING_HTTP_PORT` | Yes | `8092` | Local-only debug port on the server. |
+| `CLOUDFLARED_TUNNEL_TOKEN` | Yes | Cloudflare token | Token copied from the Cloudflare Docker connector setup. |
 | `POSTGRES_DB` | Yes | `machine_error_helper_testing` | Must match backend `DB_DATABASE`. |
 | `POSTGRES_USER` | Yes | `app_testing` | Must match backend `DB_USERNAME`. |
 | `POSTGRES_PASSWORD` | Yes | strong password | Must match backend `DB_PASSWORD`. |
@@ -238,3 +262,4 @@ EXPO_PUBLIC_API_URL=http://10.0.2.2:8090/api
 - Keep testing and production database passwords different.
 - Keep testing and production `APP_KEY` values different.
 - Point the public tunnel to the nginx service port, not to PHP-FPM.
+- For the Docker Cloudflare connector, the tunnel service URL is `http://nginx:80`, not `http://127.0.0.1:8092`.
