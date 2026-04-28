@@ -9,6 +9,7 @@ import {
   Easing,
   Image as RNImage,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -253,13 +254,25 @@ const meResponseSchema = z.object({
   }),
 });
 
+const dashboardColorMeaningSchema = z
+  .object({
+    id: z.number(),
+    label: z.string(),
+    ai_key: z.string().nullable().optional(),
+    hex_color: z.string(),
+    description: z.string().nullable().optional(),
+    priority: z.number().nullable().optional(),
+  })
+  .passthrough();
+
 const machineSchema = z.object({
   id: z.number(),
   name: z.string(),
   slug: z.string(),
   manufacturer: z.string().nullable(),
   model_number: z.string().nullable(),
-});
+  dashboard_color_meanings: z.array(dashboardColorMeaningSchema).optional().default([]),
+}).passthrough();
 
 const machinesResponseSchema = z.object({
   data: z.array(machineSchema),
@@ -308,6 +321,7 @@ const diagnosisCandidateSchema = z
     confidence: z.number().nullable(),
     metadata: z.record(z.string(), z.unknown()).nullable().optional(),
     matched_diagnostic_entry: diagnosticEntrySchema.nullable().optional(),
+    dashboard_color_meaning: dashboardColorMeaningSchema.nullable().optional(),
   })
   .passthrough();
 
@@ -351,6 +365,7 @@ type DiagnosisHistoryItem = z.infer<typeof diagnosisHistoryItemSchema>;
 type DiagnosisCandidate = z.infer<typeof diagnosisCandidateSchema>;
 type DiagnosticEntry = z.infer<typeof diagnosticEntrySchema>;
 type CodeDocumentation = z.infer<typeof codeDocumentationSchema>;
+type DashboardColorMeaning = z.infer<typeof dashboardColorMeaningSchema>;
 type AuthUser = z.infer<typeof authUserSchema>;
 type ImageSource = 'camera' | 'library';
 type ScreenshotPreviewSource = {
@@ -365,6 +380,11 @@ type ImageQuality = {
   status: ImageQualityStatus;
   sharpness: number | null;
   messages: string[];
+};
+type ConfirmCodeRow = {
+  code: string;
+  colorMeaningId: number | null;
+  id: string;
 };
 
 function sortMachinesByName(machines: Machine[]): Machine[] {
@@ -606,7 +626,7 @@ async function uploadDiagnosis(input: { machineId: number; asset: ImagePicker.Im
   return parseJsonResponse(response, diagnosisCreateSchema, 'Could not upload screenshot.');
 }
 
-async function submitManualCode(input: { diagnosisId: string; codes: string[]; moduleKey: string; token: string }): Promise<DiagnosisDetail> {
+async function submitManualCode(input: { diagnosisId: string; entries: Array<{ code: string; dashboard_color_meaning_id: number | null }>; moduleKey: string; token: string }): Promise<DiagnosisDetail> {
   const response = await fetch(`${apiBaseUrl}/diagnoses/${input.diagnosisId}/manual-code`, {
     method: 'POST',
     headers: {
@@ -615,7 +635,7 @@ async function submitManualCode(input: { diagnosisId: string; codes: string[]; m
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      codes: input.codes,
+      entries: input.entries,
       module_key: input.moduleKey || undefined,
     }),
   });
@@ -1097,17 +1117,6 @@ function DotMesh({ cellSize, phase, rows }: { cellSize: number; phase: Animated.
   );
 }
 
-function splitCodeInput(value: string): string[] {
-  return Array.from(
-    new Set(
-      value
-        .split(/[\s,;|]+/u)
-        .map((code) => code.trim())
-        .filter(Boolean),
-    ),
-  );
-}
-
 function formatPercent(value: number | null | undefined): string {
   return typeof value === 'number' ? `${Math.round(value * 100)}%` : 'n/a';
 }
@@ -1197,6 +1206,72 @@ function extractDocumentationNodes(content: unknown): DocumentationNode[] {
 
 function normalizeDocumentationUrl(value: unknown): string | null {
   return typeof value === 'string' && value.trim() !== '' ? resolveAssetUrl(value) : null;
+}
+
+function extractYouTubeVideoId(url: string): string | null {
+  const patterns = [
+    /youtu\.be\/([A-Za-z0-9_-]{6,})/i,
+    /[?&]v=([A-Za-z0-9_-]{6,})/i,
+    /youtube\.com\/embed\/([A-Za-z0-9_-]{6,})/i,
+    /youtube\.com\/shorts\/([A-Za-z0-9_-]{6,})/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+
+    if (match?.[1]) {
+      return match[1];
+    }
+  }
+
+  return null;
+}
+
+function renderYouTubeEmbed(node: DocumentationNode, key: string): ReactNode {
+  const config = node.attrs?.config;
+  const blockConfig = config && typeof config === 'object' ? config as Record<string, unknown> : {};
+  const rawUrl = typeof blockConfig.url === 'string' ? blockConfig.url : '';
+  const videoId = extractYouTubeVideoId(rawUrl);
+  const title = typeof blockConfig.title === 'string' && blockConfig.title.trim() !== '' ? blockConfig.title.trim() : 'YouTube video';
+
+  if (!videoId || rawUrl.trim() === '') {
+    return null;
+  }
+
+  const embedUrl = `https://www.youtube-nocookie.com/embed/${videoId}`;
+
+  if (Platform.OS === 'web') {
+    return (
+      <View key={key} style={styles.documentationVideoBlock}>
+        {createElement('iframe', {
+          allow: 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share',
+          allowFullScreen: true,
+          src: embedUrl,
+          style: styles.documentationVideoFrame,
+          title,
+        })}
+        <Text style={styles.documentationVideoTitle}>{title}</Text>
+      </View>
+    );
+  }
+
+  return (
+    <Pressable
+      key={key}
+      onPress={() => {
+        void Linking.openURL(rawUrl);
+      }}
+      style={({ pressed }) => [styles.documentationVideoLinkCard, pressed && styles.buttonPressed]}
+    >
+      <View style={styles.documentationVideoThumb}>
+        <Text style={styles.documentationVideoPlay}>▶</Text>
+      </View>
+      <View style={styles.documentationVideoCopy}>
+        <Text style={styles.documentationVideoTitle}>{title}</Text>
+        <Text style={styles.documentationVideoMeta}>Open YouTube video</Text>
+      </View>
+    </Pressable>
+  );
 }
 
 function plainTextFromDocumentationNodes(nodes: DocumentationNode[] | undefined): string {
@@ -1397,6 +1472,12 @@ function renderDocumentationBlock(node: DocumentationNode, key: string): ReactNo
       );
     case 'horizontalRule':
       return <View key={key} style={styles.documentationDivider} />;
+    case 'customBlock':
+      if (node.attrs?.id === 'youtubeEmbed') {
+        return renderYouTubeEmbed(node, key);
+      }
+
+      return null;
     default:
       if (children.length === 0 && typeof node.text === 'string') {
         return (
@@ -1435,6 +1516,85 @@ function codesFromCandidates(candidates: DiagnosisCandidate[]): string {
     .map((candidate) => candidate.candidate_code ?? candidate.normalized_code)
     .filter(Boolean)
     .join(' ');
+}
+
+function createConfirmRow(code = '', colorMeaningId: number | null = null): ConfirmCodeRow {
+  return {
+    code,
+    colorMeaningId,
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  };
+}
+
+function rowsFromCandidates(candidates: DiagnosisCandidate[]): ConfirmCodeRow[] {
+  const rows = candidates
+    .map((candidate) => {
+      const code = candidate.candidate_code ?? candidate.normalized_code ?? '';
+
+      if (!code) {
+        return null;
+      }
+
+      return createConfirmRow(code, candidate.dashboard_color_meaning?.id ?? null);
+    })
+    .filter((row): row is ConfirmCodeRow => row !== null);
+
+  return rows.length > 0 ? rows : [createConfirmRow()];
+}
+
+function confirmEntriesFromRows(rows: ConfirmCodeRow[]): Array<{ code: string; dashboard_color_meaning_id: number | null }> {
+  return rows
+    .map((row) => ({
+      code: row.code.trim(),
+      dashboard_color_meaning_id: row.colorMeaningId,
+    }))
+    .filter((entry) => entry.code !== '');
+}
+
+function colorMeaningsForMachine(machine: Machine | null): DashboardColorMeaning[] {
+  return machine?.dashboard_color_meanings ?? [];
+}
+
+function candidateColorMeaning(candidate: DiagnosisCandidate | null): DashboardColorMeaning | null {
+  if (!candidate) {
+    return null;
+  }
+
+  if (candidate.dashboard_color_meaning) {
+    return candidate.dashboard_color_meaning;
+  }
+
+  const metadata = candidate.metadata ?? null;
+  const label = typeof metadata?.color_status_label === 'string' ? metadata.color_status_label : null;
+
+  if (!label) {
+    return null;
+  }
+
+  return {
+    id: 0,
+    label,
+    ai_key: typeof metadata?.color_status_key === 'string' ? metadata.color_status_key : null,
+    hex_color: '#8fb7ff',
+    description: typeof metadata?.color_status_description === 'string' ? metadata.color_status_description : null,
+    priority: null,
+  };
+}
+
+function candidatePriority(candidate: DiagnosisCandidate): number {
+  return candidate.dashboard_color_meaning?.priority ?? -1;
+}
+
+function sortCandidatesForResult(candidates: DiagnosisCandidate[]): DiagnosisCandidate[] {
+  return [...candidates].sort((first, second) => {
+    const priorityDifference = candidatePriority(second) - candidatePriority(first);
+
+    if (priorityDifference !== 0) {
+      return priorityDifference;
+    }
+
+    return (first.candidate_code ?? first.normalized_code ?? '').localeCompare(second.candidate_code ?? second.normalized_code ?? '');
+  });
 }
 
 function moduleFromDiagnosis(detail: DiagnosisDetail | null): string {
@@ -1525,6 +1685,10 @@ function QualityBadge({ quality }: { quality: ImageQuality | null }) {
 function ResultPanel({ detail }: { detail: DiagnosisDetail | null }) {
   const entry = detail?.selected_diagnostic_entry ?? null;
   const candidates = detail?.candidates ?? [];
+  const sortedCandidates = sortCandidatesForResult(candidates);
+  const selectedCandidate = entry
+    ? sortedCandidates.find((candidate) => candidate.matched_diagnostic_entry?.id === entry.id) ?? sortedCandidates[0] ?? null
+    : null;
   const message = typeof detail?.result?.message === 'string' ? detail.result.message : null;
   const [documentationModal, setDocumentationModal] = useState<{ code: string; documentations: CodeDocumentation[] } | null>(null);
 
@@ -1557,10 +1721,10 @@ function ResultPanel({ detail }: { detail: DiagnosisDetail | null }) {
         {message ? <Text style={styles.helperText}>{message}</Text> : null}
 
         {entry ? (
-          <ErrorPreviewCard candidate={null} entry={entry} onOpenDocumentation={setDocumentationModal} />
-        ) : candidates.length ? (
+          <ErrorPreviewCard candidate={selectedCandidate} entry={entry} onOpenDocumentation={setDocumentationModal} />
+        ) : sortedCandidates.length ? (
           <View style={styles.matchList}>
-            {candidates.map((candidate) => (
+            {sortedCandidates.map((candidate) => (
               <ErrorPreviewCard
                 key={candidate.id}
                 candidate={candidate}
@@ -1775,9 +1939,11 @@ function ErrorPreviewCard({
   const code = entry?.primary_code ?? candidate?.candidate_code ?? candidate?.normalized_code ?? 'Code';
   const module = entry?.module_key ?? (typeof candidate?.metadata?.module_key === 'string' ? candidate.metadata.module_key : 'Not matched');
   const documentations = getEntryDocumentations(entry);
+  const colorMeaning = candidateColorMeaning(candidate);
+  const colorAccent = colorMeaning?.hex_color ?? '#8fb7ff';
 
   return (
-    <View style={styles.matchCard}>
+    <View style={[styles.matchCard, { borderLeftColor: colorAccent }]}>
       <View style={styles.matchCardHeader}>
         <View>
           <Text style={styles.matchCode}>{code}</Text>
@@ -1798,6 +1964,16 @@ function ErrorPreviewCard({
           <Text style={styles.matchScore}>{formatPercent(candidate?.confidence ?? entry?.confidence)}</Text>
         </View>
       </View>
+
+      {colorMeaning ? (
+        <View style={styles.colorMeaningPanel}>
+          <View style={[styles.colorMeaningSwatch, { backgroundColor: colorAccent }]} />
+          <View style={styles.colorMeaningCopy}>
+            <Text style={styles.colorMeaningLabel}>{colorMeaning.label}</Text>
+            {colorMeaning.description ? <Text style={styles.colorMeaningDescription}>{colorMeaning.description}</Text> : null}
+          </View>
+        </View>
+      ) : null}
 
       <Text style={styles.matchTitle}>{entry?.title || entry?.meaning || 'No manual meaning yet'}</Text>
 
@@ -2038,7 +2214,7 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
   const [imageValidationPending, setImageValidationPending] = useState(false);
   const [diagnosisId, setDiagnosisId] = useState<string | null>(null);
   const [autoAdvancedDiagnosisId, setAutoAdvancedDiagnosisId] = useState<string | null>(null);
-  const [manualCode, setManualCode] = useState('');
+  const [confirmRows, setConfirmRows] = useState<ConfirmCodeRow[]>(() => [createConfirmRow()]);
   const [moduleKey, setModuleKey] = useState('PLUGSA');
   const [manualResult, setManualResult] = useState<DiagnosisDetail | null>(null);
   const [selectedHistoryItem, setSelectedHistoryItem] = useState<DiagnosisHistoryItem | null>(null);
@@ -2099,7 +2275,7 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
   });
 
   const manualLookup = useMutation({
-    mutationFn: (input: { diagnosisId: string; codes: string[]; moduleKey: string }) => submitManualCode({ ...input, token: authToken }),
+    mutationFn: (input: { diagnosisId: string; entries: Array<{ code: string; dashboard_color_meaning_id: number | null }>; moduleKey: string }) => submitManualCode({ ...input, token: authToken }),
     onSuccess: (payload) => {
       setManualResult(payload);
       queryClient.setQueryData(['diagnosis', payload.id, authToken], payload);
@@ -2172,9 +2348,10 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
   });
 
   const activeDiagnosis = manualResult ?? diagnosis.data ?? null;
-  const manualCodes = splitCodeInput(manualCode);
+  const confirmEntries = confirmEntriesFromRows(confirmRows);
+  const colorMeanings = colorMeaningsForMachine(activeDiagnosis?.machine ?? selectedMachine ?? null);
   const canAnalyze = !!selectedMachine && !!selectedImage && imageQuality?.status !== 'fail' && !upload.isPending && !imageValidationPending;
-  const canConfirm = !!diagnosisId && manualCodes.length > 0 && !manualLookup.isPending;
+  const canConfirm = !!diagnosisId && confirmEntries.length > 0 && !manualLookup.isPending;
   const translateY = fade.interpolate({ inputRange: [0, 1], outputRange: [14, 0] });
   const machineDetails = selectedMachine ? [selectedMachine.manufacturer, selectedMachine.model_number].filter(Boolean).join(' ') || 'No model details' : null;
   const confirmScreenshotSource = useMemo<ScreenshotPreviewSource | null>(() => {
@@ -2266,7 +2443,7 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
     }
 
     setModuleKey(moduleFromDiagnosis(detail));
-    setManualCode(codesFromCandidates(detail.candidates ?? []));
+    setConfirmRows(rowsFromCandidates(detail.candidates ?? []));
     setAutoAdvancedDiagnosisId(detail.id);
     setDiagnosisStep('confirm');
   }, [autoAdvancedDiagnosisId, diagnosis.data, diagnosisStep, page]);
@@ -2348,8 +2525,24 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
     setDiagnosisId(null);
     setAutoAdvancedDiagnosisId(null);
     setManualResult(null);
-    setManualCode('');
+    setConfirmRows([createConfirmRow()]);
     setModuleKey('PLUGSA');
+  }
+
+  function updateConfirmRow(rowId: string, patch: Partial<Omit<ConfirmCodeRow, 'id'>>): void {
+    setConfirmRows((current) => current.map((row) => (row.id === rowId ? { ...row, ...patch } : row)));
+  }
+
+  function addConfirmRow(): void {
+    setConfirmRows((current) => [...current, createConfirmRow('', colorMeanings[0]?.id ?? null)]);
+  }
+
+  function removeConfirmRow(rowId: string): void {
+    setConfirmRows((current) => {
+      const nextRows = current.filter((row) => row.id !== rowId);
+
+      return nextRows.length > 0 ? nextRows : [createConfirmRow()];
+    });
   }
 
   function selectMachine(machine: Machine): void {
@@ -2736,13 +2929,12 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
 
                   {confirmScreenshotSource ? <ScreenshotViewer source={confirmScreenshotSource} /> : null}
 
-                  <View style={styles.detectedBox}>
-                    <Text style={styles.detectedLabel}>AI detected</Text>
-                    <Text style={styles.detectedText}>{resultString(activeDiagnosis, 'module_key') || moduleKey || 'Unknown module'}</Text>
-                    <Text style={styles.detectedSubText}>{codesFromCandidates(activeDiagnosis?.candidates ?? []) || 'No code detected'}</Text>
+                  <View style={styles.confirmNudgeBox}>
+                    <Text style={styles.confirmNudgeTitle}>Check the extracted codes</Text>
+                    <Text style={styles.confirmNudgeText}>Review each row against the screenshot. Edit the code or color status before continuing.</Text>
                   </View>
 
-                  <View style={styles.inputGrid}>
+                  <View style={[styles.inputGrid, styles.confirmInputGrid]}>
                     <View style={styles.inputGroup}>
                       <Text style={styles.inputLabel}>Module</Text>
                       <TextInput
@@ -2756,22 +2948,75 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
                     </View>
 
                     <View style={styles.inputGroup}>
-                      <Text style={styles.inputLabel}>Codes</Text>
-                      <TextInput
-                        autoCapitalize="characters"
-                        multiline
-                        onChangeText={setManualCode}
-                        placeholder="250 251 260"
-                        placeholderTextColor="#7f8490"
-                        style={[styles.input, styles.inputTall]}
-                        value={manualCode}
-                      />
+                      <View style={styles.confirmRowsHeader}>
+                        <Text style={styles.inputLabel}>Codes</Text>
+                        <Pressable onPress={addConfirmRow} style={({ pressed }) => [styles.smallActionButton, pressed && styles.buttonPressed]}>
+                          <Text style={styles.smallActionButtonText}>Add row</Text>
+                        </Pressable>
+                      </View>
+                      <View style={styles.confirmRows}>
+                        {confirmRows.map((row, index) => (
+                          <View key={row.id} style={styles.confirmRow}>
+                            <View style={styles.confirmRowTop}>
+                              <TextInput
+                                autoCapitalize="characters"
+                                onChangeText={(value) => updateConfirmRow(row.id, { code: value })}
+                                placeholder={`Code ${index + 1}`}
+                                placeholderTextColor="#7f8490"
+                                style={[styles.input, styles.confirmCodeInput]}
+                                value={row.code}
+                              />
+                              <Pressable
+                                accessibilityLabel="Remove code row"
+                                disabled={confirmRows.length === 1 && row.code.trim() === ''}
+                                onPress={() => removeConfirmRow(row.id)}
+                                style={({ pressed }) => [
+                                  styles.removeRowButton,
+                                  confirmRows.length === 1 && row.code.trim() === '' && styles.buttonDisabled,
+                                  pressed && styles.buttonPressed,
+                                ]}
+                              >
+                                <Text style={styles.removeRowButtonText}>x</Text>
+                              </Pressable>
+                            </View>
+                            <View style={styles.colorChoiceRow}>
+                              <Pressable
+                                onPress={() => updateConfirmRow(row.id, { colorMeaningId: null })}
+                                style={({ pressed }) => [
+                                  styles.colorChoice,
+                                  row.colorMeaningId === null && styles.colorChoiceSelected,
+                                  pressed && styles.buttonPressed,
+                                ]}
+                              >
+                                <View style={[styles.colorChoiceSwatch, styles.colorChoiceSwatchUnknown]} />
+                                <Text style={[styles.colorChoiceText, row.colorMeaningId === null && styles.colorChoiceTextSelected]}>Unknown</Text>
+                              </Pressable>
+                              {colorMeanings.map((meaning) => (
+                                <Pressable
+                                  key={meaning.id}
+                                  onPress={() => updateConfirmRow(row.id, { colorMeaningId: meaning.id })}
+                                  style={({ pressed }) => [
+                                    styles.colorChoice,
+                                    row.colorMeaningId === meaning.id && styles.colorChoiceSelected,
+                                    pressed && styles.buttonPressed,
+                                  ]}
+                                >
+                                  <View style={[styles.colorChoiceSwatch, { backgroundColor: meaning.hex_color }]} />
+                                  <Text style={[styles.colorChoiceText, row.colorMeaningId === meaning.id && styles.colorChoiceTextSelected]}>
+                                    {meaning.label}
+                                  </Text>
+                                </Pressable>
+                              ))}
+                            </View>
+                          </View>
+                        ))}
+                      </View>
                     </View>
                   </View>
 
                   {manualLookup.error ? <Text style={styles.error}>{manualLookup.error.message}</Text> : null}
 
-                  <View style={styles.navRow}>
+                  <View style={styles.confirmNavRow}>
                     <Pressable onPress={() => setDiagnosisStep('upload')} style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}>
                       <Text style={styles.secondaryButtonText}>Back</Text>
                     </Pressable>
@@ -2781,7 +3026,7 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
                         diagnosisId &&
                         manualLookup.mutate({
                           diagnosisId,
-                          codes: manualCodes,
+                          entries: confirmEntries,
                           moduleKey: moduleKey.trim(),
                         })
                       }
@@ -4318,12 +4563,34 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     marginTop: 4,
   },
+  confirmNudgeBox: {
+    backgroundColor: 'rgba(143, 183, 255, 0.09)',
+    borderColor: 'rgba(143, 183, 255, 0.28)',
+    borderRadius: 8,
+    borderWidth: 1,
+    marginTop: 16,
+    padding: 12,
+  },
+  confirmNudgeTitle: {
+    color: '#f7f8fb',
+    fontSize: 15,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  confirmNudgeText: {
+    color: '#c9d2e3',
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 20,
+    marginTop: 5,
+  },
   inputGrid: {
     gap: 12,
     marginTop: 14,
   },
   inputGroup: {
-    flex: 1,
+    width: '100%',
   },
   inputLabel: {
     color: '#a9a49a',
@@ -4349,6 +4616,119 @@ const styles = StyleSheet.create({
     minHeight: 76,
     paddingTop: 12,
     textAlignVertical: 'top',
+  },
+  confirmInputGrid: {
+    gap: 10,
+    marginTop: 12,
+    position: 'relative',
+    zIndex: 2,
+  },
+  confirmRowsHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  smallActionButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(143, 183, 255, 0.12)',
+    borderColor: 'rgba(143, 183, 255, 0.32)',
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: 34,
+    paddingHorizontal: 10,
+  },
+  smallActionButtonText: {
+    color: '#c7d8ff',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+    textTransform: 'uppercase',
+  },
+  confirmRows: {
+    gap: 10,
+    position: 'relative',
+    zIndex: 2,
+  },
+  confirmRow: {
+    backgroundColor: 'rgba(255, 255, 255, 0.035)',
+    borderColor: 'rgba(255, 255, 255, 0.09)',
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 10,
+    padding: 10,
+  },
+  confirmRowTop: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+  },
+  confirmCodeInput: {
+    flex: 1,
+  },
+  removeRowButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.055)',
+    borderColor: 'rgba(255, 255, 255, 0.14)',
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 48,
+    justifyContent: 'center',
+    width: 48,
+  },
+  removeRowButtonText: {
+    color: '#f7f8fb',
+    fontSize: 18,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 20,
+  },
+  colorChoiceRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  colorChoice: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.045)',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 7,
+    minHeight: 36,
+    paddingHorizontal: 9,
+  },
+  colorChoiceSelected: {
+    backgroundColor: 'rgba(143, 183, 255, 0.13)',
+    borderColor: 'rgba(143, 183, 255, 0.5)',
+  },
+  colorChoiceSwatch: {
+    borderColor: 'rgba(255, 255, 255, 0.42)',
+    borderRadius: 999,
+    borderWidth: 1,
+    height: 14,
+    width: 14,
+  },
+  colorChoiceSwatchUnknown: {
+    backgroundColor: 'rgba(255, 255, 255, 0.16)',
+  },
+  colorChoiceText: {
+    color: '#c7cdd8',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  colorChoiceTextSelected: {
+    color: '#eef4ff',
+  },
+  confirmNavRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 6,
+    position: 'relative',
+    zIndex: 1,
   },
   resultPanel: {
     backgroundColor: 'rgba(255, 255, 255, 0.028)',
@@ -4407,6 +4787,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.024)',
     borderColor: 'rgba(255, 255, 255, 0.08)',
     borderRadius: 8,
+    borderLeftWidth: 5,
     borderWidth: 1,
     padding: 12,
   },
@@ -4486,6 +4867,42 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
     lineHeight: 22,
     marginTop: 10,
+  },
+  colorMeaningPanel: {
+    alignItems: 'flex-start',
+    backgroundColor: 'rgba(255, 255, 255, 0.035)',
+    borderColor: 'rgba(255, 255, 255, 0.09)',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 12,
+    padding: 10,
+  },
+  colorMeaningSwatch: {
+    borderColor: 'rgba(255, 255, 255, 0.42)',
+    borderRadius: 999,
+    borderWidth: 1,
+    height: 18,
+    marginTop: 1,
+    width: 18,
+  },
+  colorMeaningCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  colorMeaningLabel: {
+    color: '#f7f8fb',
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  colorMeaningDescription: {
+    color: '#c9d2e3',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0,
+    lineHeight: 19,
   },
   textBlock: {
     marginTop: 14,
@@ -4758,6 +5175,65 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     height: 220,
     width: '100%',
+  },
+  documentationVideoBlock: {
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 8,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  documentationVideoFrame: {
+    aspectRatio: 16 / 9,
+    borderWidth: 0,
+    width: '100%',
+  },
+  documentationVideoTitle: {
+    color: '#f7f8fb',
+    fontSize: 14,
+    fontWeight: '900',
+    letterSpacing: 0,
+    lineHeight: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  documentationVideoLinkCard: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.035)',
+    borderColor: 'rgba(143, 183, 255, 0.22)',
+    borderRadius: 8,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    minHeight: 86,
+    padding: 12,
+  },
+  documentationVideoThumb: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(143, 183, 255, 0.14)',
+    borderColor: 'rgba(143, 183, 255, 0.34)',
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 56,
+    justifyContent: 'center',
+    width: 78,
+  },
+  documentationVideoPlay: {
+    color: '#d7e4ff',
+    fontSize: 20,
+    fontWeight: '900',
+    letterSpacing: 0,
+  },
+  documentationVideoCopy: {
+    flex: 1,
+  },
+  documentationVideoMeta: {
+    color: '#8fb7ff',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0,
+    paddingHorizontal: 12,
+    textTransform: 'uppercase',
   },
   documentationTable: {
     borderColor: 'rgba(255, 255, 255, 0.12)',

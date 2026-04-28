@@ -33,6 +33,11 @@ class Machine extends Model
         return $this->hasMany(MachineCodePattern::class);
     }
 
+    public function dashboardColorMeanings(): HasMany
+    {
+        return $this->hasMany(DashboardColorMeaning::class);
+    }
+
     public function users(): BelongsToMany
     {
         return $this->belongsToMany(User::class)->withTimestamps();
@@ -67,5 +72,4 @@ class Machine extends Model
     {
         return $this->hasMany(ManualExtractionCandidate::class);
     }
-
 }

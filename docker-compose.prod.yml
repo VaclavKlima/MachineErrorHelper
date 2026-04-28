@@ -1,0 +1,111 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+      target: app
+    env_file:
+      - ./apps/backend/.env
+    restart: unless-stopped
+    volumes:
+      - backend-storage:/var/www/html/storage
+      - backend-cache:/var/www/html/bootstrap/cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app
+
+  nginx:
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+      target: nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - backend-storage:/var/www/html/storage:ro
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - app
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+      target: app
+    env_file:
+      - ./apps/backend/.env
+    command: php artisan horizon
+    restart: unless-stopped
+    volumes:
+      - backend-storage:/var/www/html/storage
+      - backend-cache:/var/www/html/bootstrap/cache
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - app
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+      target: app
+    env_file:
+      - ./apps/backend/.env
+    command: php artisan schedule:work
+    restart: unless-stopped
+    volumes:
+      - backend-storage:/var/www/html/storage
+      - backend-cache:/var/www/html/bootstrap/cache
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - app
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-machine_error_helper}
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - app
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - redis-data:/data
+    networks:
+      - app
+
+volumes:
+  backend-cache:
+  backend-storage:
+  postgres-data:
+  redis-data:
+
+networks:
+  app:
+    driver: bridge

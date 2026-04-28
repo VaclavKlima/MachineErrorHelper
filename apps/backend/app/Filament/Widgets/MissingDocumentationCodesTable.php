@@ -3,6 +3,7 @@
 namespace App\Filament\Widgets;
 
 use App\Filament\Resources\DiagnosticEntries\DiagnosticEntryResource;
+use App\Filament\RichContent\YouTubeEmbedBlock;
 use App\Models\CodeDocumentation;
 use App\Models\DiagnosticEntry;
 use App\Services\DocumentationOpportunityService;
@@ -84,6 +85,9 @@ class MissingDocumentationCodesTable extends TableWidget
                             RichEditor::make('content')
                                 ->label('Documentation body')
                                 ->json()
+                                ->customBlocks([
+                                    YouTubeEmbedBlock::class,
+                                ])
                                 ->fileAttachmentsDisk('public')
                                 ->fileAttachmentsDirectory('documentation-images')
                                 ->fileAttachmentsVisibility('public')

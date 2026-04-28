@@ -15,6 +15,7 @@ class DiagnosisCandidate extends Model
         'matched_error_code_id',
         'matched_definition_id',
         'matched_diagnostic_entry_id',
+        'dashboard_color_meaning_id',
         'candidate_code',
         'normalized_code',
         'source',
@@ -48,5 +49,10 @@ class DiagnosisCandidate extends Model
     public function matchedDiagnosticEntry(): BelongsTo
     {
         return $this->belongsTo(DiagnosticEntry::class, 'matched_diagnostic_entry_id');
+    }
+
+    public function dashboardColorMeaning(): BelongsTo
+    {
+        return $this->belongsTo(DashboardColorMeaning::class);
     }
 }

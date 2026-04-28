@@ -15,6 +15,7 @@ class MachineController extends Controller
 
         $machines = Machine::query()
             ->where('is_active', true)
+            ->with(['dashboardColorMeanings' => fn ($query) => $query->where('is_active', true)->orderBy('priority')->orderBy('label')])
             ->when($search !== '', function ($query) use ($search): void {
                 $needle = '%'.$search.'%';
 
@@ -36,6 +37,7 @@ class MachineController extends Controller
         $machines = $request->user()
             ->machines()
             ->where('is_active', true)
+            ->with(['dashboardColorMeanings' => fn ($query) => $query->where('is_active', true)->orderBy('priority')->orderBy('label')])
             ->orderBy('name')
             ->get(['machines.id', 'machines.name', 'machines.slug', 'machines.manufacturer', 'machines.model_number']);
 
@@ -49,7 +51,9 @@ class MachineController extends Controller
         $request->user()->machines()->syncWithoutDetaching([$machine->id]);
 
         return response()->json([
-            'data' => $machine->only(['id', 'name', 'slug', 'manufacturer', 'model_number']),
+            'data' => $machine
+                ->load(['dashboardColorMeanings' => fn ($query) => $query->where('is_active', true)->orderBy('priority')->orderBy('label')])
+                ->only(['id', 'name', 'slug', 'manufacturer', 'model_number', 'dashboard_color_meanings']),
         ], 201);
     }
 
@@ -71,6 +75,7 @@ class MachineController extends Controller
         $machine->load([
             'softwareVersions' => fn ($query) => $query->orderBy('sort_order')->orderBy('version'),
             'codePatterns' => fn ($query) => $query->where('is_active', true)->orderBy('priority'),
+            'dashboardColorMeanings' => fn ($query) => $query->where('is_active', true)->orderBy('priority')->orderBy('label'),
         ]);
 
         return response()->json(['data' => $machine]);

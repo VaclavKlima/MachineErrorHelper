@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\ProcessDiagnosisScreenshot;
+use App\Models\DashboardColorMeaning;
 use App\Models\DiagnosisRequest;
 use App\Models\DiagnosticEntry;
 use App\Models\Machine;
@@ -76,10 +77,16 @@ class DiagnosisController extends Controller
     public function show(DiagnosisRequest $diagnosis): JsonResponse
     {
         $diagnosis->load([
-            'machine:id,name,slug,manufacturer,model_number',
+            'machine' => fn ($query) => $query
+                ->select('id', 'name', 'slug', 'manufacturer', 'model_number')
+                ->with(['dashboardColorMeanings' => fn ($query) => $query->where('is_active', true)->orderBy('priority')->orderBy('label')]),
             'softwareVersion:id,version',
             'selectedDiagnosticEntry.codeDocumentations',
-            'candidates.matchedDiagnosticEntry.codeDocumentations',
+            'candidates' => fn ($query) => $query
+                ->with([
+                    'matchedDiagnosticEntry.codeDocumentations',
+                    'dashboardColorMeaning:id,label,ai_key,hex_color,description,priority',
+                ]),
         ]);
 
         return response()->json([
@@ -118,20 +125,30 @@ class DiagnosisController extends Controller
     public function manualCode(Request $request, DiagnosisRequest $diagnosis): JsonResponse
     {
         $data = $request->validate([
-            'code' => ['nullable', 'string', 'max:255', 'required_without:codes'],
-            'codes' => ['nullable', 'array', 'required_without:code'],
+            'code' => ['nullable', 'string', 'max:255', 'required_without_all:codes,entries'],
+            'codes' => ['nullable', 'array', 'required_without_all:code,entries'],
             'codes.*' => ['string', 'max:64'],
+            'entries' => ['nullable', 'array', 'required_without_all:code,codes'],
+            'entries.*.code' => ['required_with:entries', 'string', 'max:64'],
+            'entries.*.dashboard_color_meaning_id' => ['nullable', 'integer', 'exists:dashboard_color_meanings,id'],
             'module_key' => ['nullable', 'string', 'max:64'],
         ]);
 
-        $codes = $this->extractManualCodes($data);
+        $entries = $this->extractManualEntries($data);
+        $codes = array_values(array_unique(array_map(fn (array $entry): string => $entry['code'], $entries)));
         $moduleKey = $this->normalizeModuleKey((string) ($data['module_key'] ?? ''));
         $matchedCandidates = 0;
         $candidateConfidences = [];
+        $colorMeanings = DashboardColorMeaning::query()
+            ->where('machine_id', $diagnosis->machine_id)
+            ->whereIn('id', array_filter(array_map(fn (array $entry): ?int => $entry['dashboard_color_meaning_id'], $entries)))
+            ->get()
+            ->keyBy('id');
 
         $diagnosis->candidates()->delete();
 
-        foreach ($codes as $code) {
+        foreach ($entries as $entry) {
+            $code = $entry['code'];
             $normalizedCode = $this->normalizeDiagnosticCode($code);
 
             if ($normalizedCode === '') {
@@ -146,6 +163,9 @@ class DiagnosisController extends Controller
 
             $confidence = $match ? 1.0 : 0.6;
             $candidateConfidences[] = $confidence;
+            $colorMeaning = $entry['dashboard_color_meaning_id']
+                ? $colorMeanings->get($entry['dashboard_color_meaning_id'])
+                : null;
 
             $diagnosis->candidates()->create([
                 'candidate_code' => $code,
@@ -153,8 +173,12 @@ class DiagnosisController extends Controller
                 'source' => 'manual_entry',
                 'confidence' => $confidence,
                 'matched_diagnostic_entry_id' => $match?->id,
+                'dashboard_color_meaning_id' => $colorMeaning?->id,
                 'metadata' => array_filter([
                     'module_key' => $moduleKey,
+                    'color_status_key' => $colorMeaning?->ai_key,
+                    'color_status_label' => $colorMeaning?->label,
+                    'color_status_description' => $colorMeaning?->description,
                     'matching_strategy' => $matchingStrategy,
                 ]),
             ]);
@@ -183,6 +207,45 @@ class DiagnosisController extends Controller
         ]);
 
         return $this->show($diagnosis->refresh());
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     * @return array<int, array{code: string, dashboard_color_meaning_id: int|null}>
+     */
+    private function extractManualEntries(array $data): array
+    {
+        if (is_array($data['entries'] ?? null)) {
+            $entries = [];
+
+            foreach ($data['entries'] as $entry) {
+                if (! is_array($entry) || ! is_scalar($entry['code'] ?? null)) {
+                    continue;
+                }
+
+                $code = trim((string) $entry['code']);
+
+                if ($code === '') {
+                    continue;
+                }
+
+                $entries[] = [
+                    'code' => $code,
+                    'dashboard_color_meaning_id' => is_numeric($entry['dashboard_color_meaning_id'] ?? null)
+                        ? (int) $entry['dashboard_color_meaning_id']
+                        : null,
+                ];
+            }
+
+            if ($entries !== []) {
+                return $entries;
+            }
+        }
+
+        return array_map(
+            fn (string $code): array => ['code' => $code, 'dashboard_color_meaning_id' => null],
+            $this->extractManualCodes($data),
+        );
     }
 
     /**

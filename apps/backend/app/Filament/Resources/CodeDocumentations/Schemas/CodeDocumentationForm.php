@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\CodeDocumentations\Schemas;
 
+use App\Filament\RichContent\YouTubeEmbedBlock;
 use App\Models\DiagnosticEntry;
 use Filament\Forms\Components\RichEditor;
 use Filament\Forms\Components\Select;
@@ -63,6 +64,9 @@ class CodeDocumentationForm
                 RichEditor::make('content')
                     ->label('Documentation body')
                     ->json()
+                    ->customBlocks([
+                        YouTubeEmbedBlock::class,
+                    ])
                     ->fileAttachmentsDisk('public')
                     ->fileAttachmentsDirectory('documentation-images')
                     ->fileAttachmentsVisibility('public')

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Filament\RichContent\YouTubeEmbedBlock;
 use Filament\Forms\Components\RichEditor\Models\Concerns\InteractsWithRichContent;
 use Filament\Forms\Components\RichEditor\Models\Contracts\HasRichContent;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -28,6 +29,9 @@ class CodeDocumentation extends Model implements HasRichContent
     protected function setUpRichContent(): void
     {
         $this->registerRichContent('content')
+            ->customBlocks([
+                YouTubeEmbedBlock::class,
+            ])
             ->fileAttachmentsDisk('public')
             ->fileAttachmentsVisibility('public')
             ->json();

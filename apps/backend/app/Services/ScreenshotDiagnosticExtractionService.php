@@ -2,8 +2,10 @@
 
 namespace App\Services;
 
+use App\Models\DashboardColorMeaning;
 use App\Models\DiagnosisRequest;
 use App\Models\DiagnosticEntry;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Prism\Prism\Enums\Provider;
@@ -37,8 +39,8 @@ class ScreenshotDiagnosticExtractionService
         $response = Prism::structured()
             ->using($this->provider(), (string) env('SCREENSHOT_AI_MODEL', 'gemini-2.5-pro'))
             ->withSchema($this->schema())
-            ->withSystemPrompt($this->systemPrompt())
-            ->withPrompt($this->prompt(), [
+            ->withSystemPrompt($this->systemPrompt($diagnosis))
+            ->withPrompt($this->prompt($diagnosis), [
                 Image::fromLocalPath($path),
             ])
             ->usingTemperature(0.0)
@@ -86,6 +88,7 @@ class ScreenshotDiagnosticExtractionService
 
             $seen[$dedupeKey] = true;
             [$match, $matchingStrategy] = $this->matchDiagnosticEntry($diagnosis, $code, $moduleKey);
+            $colorMeaning = $this->matchColorMeaning($diagnosis, $error);
 
             $created[] = $diagnosis->candidates()->create([
                 'candidate_code' => (string) ($error['code'] ?? $code),
@@ -93,11 +96,17 @@ class ScreenshotDiagnosticExtractionService
                 'source' => 'gemini_screenshot',
                 'confidence' => $this->normalizeConfidence($error['confidence'] ?? 0.7),
                 'matched_diagnostic_entry_id' => $match?->id,
+                'dashboard_color_meaning_id' => $colorMeaning?->id,
                 'metadata' => array_filter([
                     'module_key' => $moduleKey ?: null,
                     'display_text' => $this->nullableCleanText($error['display_text'] ?? null),
                     'label' => $this->nullableCleanText($error['label'] ?? null),
                     'color' => $this->nullableCleanText($error['color'] ?? null),
+                    'observed_color' => $this->nullableCleanText($error['observed_color'] ?? null),
+                    'color_status_key' => $colorMeaning?->ai_key ?? $this->nullableCleanText($error['color_status_key'] ?? null),
+                    'color_status_label' => $colorMeaning?->label ?? $this->nullableCleanText($error['color_status_label'] ?? null),
+                    'color_status_description' => $colorMeaning?->description,
+                    'color_status_confidence' => $this->normalizeConfidence($error['color_status_confidence'] ?? 0.7),
                     'software_version' => $this->nullableCleanText($extraction['software_version'] ?? null),
                     'serial_number' => $this->nullableCleanText($extraction['serial_number'] ?? null),
                     'controller_identifier' => $this->nullableCleanText($extraction['controller_identifier'] ?? null),
@@ -127,6 +136,10 @@ class ScreenshotDiagnosticExtractionService
                 new StringSchema('display_text', 'Exact short visible text near this error.', nullable: true),
                 new StringSchema('label', 'Nearby label such as error, alarm, DTC, active, stored.', nullable: true),
                 new StringSchema('color', 'Visible background/text color for this error, such as red, purple, yellow, orange.', nullable: true),
+                new StringSchema('observed_color', 'Short plain-language description of the visible badge background color.', nullable: true),
+                new StringSchema('color_status_key', 'Machine color legend key that best matches this badge color, or unknown when unclear.', nullable: true),
+                new StringSchema('color_status_label', 'Machine color legend label that best matches this badge color, or unknown when unclear.', nullable: true),
+                new NumberSchema('color_status_confidence', 'Confidence that the badge color matches the selected machine color legend meaning, 0.0 to 1.0.', minimum: 0.0, maximum: 1.0),
                 new NumberSchema('confidence', 'Confidence that this visible item is an actual active error code, 0.0 to 1.0.', minimum: 0.0, maximum: 1.0),
             ],
             requiredFields: ['code', 'confidence'],
@@ -147,9 +160,11 @@ class ScreenshotDiagnosticExtractionService
         );
     }
 
-    private function systemPrompt(): string
+    private function systemPrompt(DiagnosisRequest $diagnosis): string
     {
-        return <<<'PROMPT'
+        $legend = $this->colorLegendPrompt($diagnosis);
+
+        return <<<PROMPT
 You read screenshots of machine dashboards for a machinist.
 
 Extract all visible diagnostic/error/alarm codes. Do not stop at the first code.
@@ -172,15 +187,23 @@ Rules:
 - If the module appears as PLUG_SA, keep that text. The backend will normalize it.
 - If two codes are visible, return two errors.
 - If three badges are visible, return three errors.
+- When a machine color legend is provided, map each visible badge color to exactly one configured color_status_key. Use unknown only when none of the configured colors are a reasonable match.
 - Ignore normal labels, menu numbers, timestamps, page numbers, controller ids, software versions, serial numbers, and values that are clearly not errors.
 - Do not return numbers from SW, SN, or the module header as errors unless the same number is also visible as a colored badge in the List of errors panel.
 - If glare, angle, or blur makes one badge uncertain, include it with lower confidence instead of dropping the other readable badges.
+
+{$legend}
 PROMPT;
     }
 
-    private function prompt(): string
+    private function prompt(DiagnosisRequest $diagnosis): string
     {
-        return 'Read this Merlo-style dashboard screenshot. Extract the module header, controller identifier, SW, SN, OCR text, and every visible colored error-code badge under the List of errors panel.';
+        $colorKeys = $this->activeColorMeanings($diagnosis)
+            ->pluck('ai_key')
+            ->push('unknown')
+            ->implode(', ');
+
+        return "Read this Merlo-style dashboard screenshot. Extract the module header, controller identifier, SW, SN, OCR text, and every visible colored error-code badge under the List of errors panel. For color_status_key use one of: {$colorKeys}.";
     }
 
     /**
@@ -208,6 +231,10 @@ PROMPT;
                 'display_text' => $this->nullableCleanText($error['display_text'] ?? null),
                 'label' => $this->nullableCleanText($error['label'] ?? null),
                 'color' => $this->nullableCleanText($error['color'] ?? null),
+                'observed_color' => $this->nullableCleanText($error['observed_color'] ?? null),
+                'color_status_key' => $this->normalizeColorStatusKey($error['color_status_key'] ?? null),
+                'color_status_label' => $this->nullableCleanText($error['color_status_label'] ?? null),
+                'color_status_confidence' => $this->normalizeConfidence($error['color_status_confidence'] ?? 0.7),
                 'confidence' => $this->normalizeConfidence($error['confidence'] ?? 0.7),
             ];
         }
@@ -296,5 +323,96 @@ PROMPT;
         $cleaned = trim(preg_replace('/\s+/u', ' ', (string) $text) ?? (string) $text);
 
         return $cleaned !== '' ? $cleaned : null;
+    }
+
+    /**
+     * @return Collection<int, DashboardColorMeaning>
+     */
+    private function activeColorMeanings(DiagnosisRequest $diagnosis): Collection
+    {
+        return $diagnosis->machine
+            ? $diagnosis->machine->dashboardColorMeanings()
+                ->where('is_active', true)
+                ->orderBy('priority')
+                ->orderBy('label')
+                ->get()
+            : DashboardColorMeaning::query()->whereRaw('1 = 0')->get();
+    }
+
+    private function colorLegendPrompt(DiagnosisRequest $diagnosis): string
+    {
+        $meanings = $this->activeColorMeanings($diagnosis);
+
+        if ($meanings->isEmpty()) {
+            return 'No machine-specific color legend is configured. Return observed_color when visible and use color_status_key unknown.';
+        }
+
+        $lines = $meanings->map(function (DashboardColorMeaning $meaning): string {
+            $aliases = implode(' / ', $meaning->ai_aliases ?? []);
+            $description = $meaning->description ? " End-user description: {$meaning->description}" : '';
+
+            return "- {$meaning->ai_key}: {$meaning->label}; {$aliases}; approximately {$meaning->hex_color}.{$description}";
+        })->implode("\n");
+
+        return "Machine-specific color legend:\n{$lines}";
+    }
+
+    private function normalizeColorStatusKey(mixed $key): ?string
+    {
+        if (! is_scalar($key)) {
+            return null;
+        }
+
+        $normalized = DashboardColorMeaning::normalizeAiKey((string) $key);
+
+        return $normalized !== '' ? $normalized : null;
+    }
+
+    /**
+     * @param  array<string, mixed>  $error
+     */
+    private function matchColorMeaning(DiagnosisRequest $diagnosis, array $error): ?DashboardColorMeaning
+    {
+        $meanings = $this->activeColorMeanings($diagnosis);
+
+        if ($meanings->isEmpty()) {
+            return null;
+        }
+
+        $statusKey = $this->normalizeColorStatusKey($error['color_status_key'] ?? null);
+
+        if ($statusKey && $statusKey !== 'unknown') {
+            $match = $meanings->first(fn (DashboardColorMeaning $meaning): bool => $meaning->ai_key === $statusKey);
+
+            if ($match) {
+                return $match;
+            }
+        }
+
+        $colorText = Str::of(implode(' ', array_filter([
+            $error['observed_color'] ?? null,
+            $error['color'] ?? null,
+            $error['color_status_label'] ?? null,
+        ], fn ($value): bool => is_scalar($value) && trim((string) $value) !== '')))
+            ->lower()
+            ->toString();
+
+        if ($colorText === '') {
+            return null;
+        }
+
+        return $meanings->first(function (DashboardColorMeaning $meaning) use ($colorText): bool {
+            if (str_contains($colorText, Str::lower($meaning->label))) {
+                return true;
+            }
+
+            foreach ($meaning->ai_aliases ?? [] as $alias) {
+                if (str_contains($colorText, Str::lower($alias))) {
+                    return true;
+                }
+            }
+
+            return false;
+        });
     }
 }

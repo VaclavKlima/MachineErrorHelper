@@ -2,6 +2,7 @@
 
 namespace App\Filament\Resources\DiagnosticEntries\Schemas;
 
+use App\Filament\RichContent\YouTubeEmbedBlock;
 use App\Models\CodeDocumentation;
 use App\Models\DiagnosticEntry;
 use Filament\Actions\Action;
@@ -65,6 +66,9 @@ class DiagnosticEntryForm
                         RichEditor::make('content')
                             ->label('Documentation body')
                             ->json()
+                            ->customBlocks([
+                                YouTubeEmbedBlock::class,
+                            ])
                             ->fileAttachmentsDisk('public')
                             ->fileAttachmentsDirectory('documentation-images')
                             ->fileAttachmentsVisibility('public')
