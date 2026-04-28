@@ -12,6 +12,7 @@
         "laravel/framework": "^13.0",
         "laravel/horizon": "^5.45",
         "laravel/sanctum": "^4.3",
+        "laravel/telescope": "^5.20",
         "laravel/tinker": "^3.0",
         "prism-php/prism": "^0.100.1",
         "sentry/sentry-laravel": "^4.25",
@@ -28,7 +29,6 @@
         "laravel/boost": "^2.4",
         "laravel/pail": "^1.2.5",
         "laravel/pint": "^1.27",
-        "laravel/telescope": "^5.20",
         "mockery/mockery": "^1.6",
         "nunomaduro/collision": "^8.6",
         "phpunit/phpunit": "^12.5.12"

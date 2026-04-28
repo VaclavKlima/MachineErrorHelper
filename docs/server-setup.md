@@ -165,7 +165,8 @@ Used by Laravel, workers, scheduler, queues, and admin/API requests.
 | `MANUAL_AI_EXTRACTION_ENABLED` | Yes | `false` | Set true only after configuring `GEMINI_API_KEY`. |
 | `MANUAL_AI_MODEL` | No | `gemini-2.5-flash` | Manual extraction model. |
 | `SCREENSHOT_AI_MODEL` | No | `gemini-2.5-pro` | Screenshot diagnosis model. |
-| `TELESCOPE_ENABLED` | No | `false` | Keep false on public testing unless you intentionally need request debugging. |
+| `TELESCOPE_ENABLED` | No | `true` | Enabled on the testing server for debugging. |
+| `TELESCOPE_ALLOWED_EMAILS` | Yes when Telescope is enabled | `admin@example.com` | Comma-separated admin emails allowed to open `/telescope`. |
 
 ### Mobile `apps/mobile/.env.testing-server`
 
