@@ -70,8 +70,22 @@ check_prod_env() {
   fi
 }
 
+check_testing_env() {
+  if [ ! -f .env.testing-server ]; then
+    fail ".env.testing-server is missing. Copy .env.testing-server.example and edit it before starting testing."
+  fi
+
+  if [ ! -f apps/backend/.env.testing-server ]; then
+    fail "apps/backend/.env.testing-server is missing. Copy apps/backend/.env.testing-server.example and edit it before starting testing."
+  fi
+}
+
 prod_compose() {
   docker compose -f docker-compose.prod.yml "$@"
+}
+
+testing_compose() {
+  docker compose --env-file .env.testing-server -f docker-compose.testing.yml "$@"
 }
 
 run_prod_release_tasks() {
@@ -84,4 +98,16 @@ run_prod_release_tasks() {
   run prod_compose exec -T backend php artisan view:cache
   run prod_compose exec -T backend php artisan event:cache
   run prod_compose exec -T backend php artisan queue:restart
+}
+
+run_testing_release_tasks() {
+  section "Running Laravel testing release tasks"
+  run testing_compose exec -T backend php artisan migrate --force
+  run testing_compose exec -T backend php artisan storage:link --force
+  run testing_compose exec -T backend php artisan optimize:clear
+  run testing_compose exec -T backend php artisan config:cache
+  run testing_compose exec -T backend php artisan route:cache
+  run testing_compose exec -T backend php artisan view:cache
+  run testing_compose exec -T backend php artisan event:cache
+  run testing_compose exec -T backend php artisan queue:restart
 }

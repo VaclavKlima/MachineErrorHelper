@@ -1,0 +1,114 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+      target: app
+    env_file:
+      - path: ./apps/backend/.env.testing-server
+        required: false
+    restart: unless-stopped
+    volumes:
+      - testing-backend-storage:/var/www/html/storage
+      - testing-backend-cache:/var/www/html/bootstrap/cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - testing
+
+  nginx:
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+      target: nginx
+    restart: unless-stopped
+    ports:
+      - "${TESTING_HTTP_BIND:-127.0.0.1}:${TESTING_HTTP_PORT:-8092}:80"
+    volumes:
+      - testing-backend-storage:/var/www/html/storage:ro
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - testing
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+      target: app
+    env_file:
+      - path: ./apps/backend/.env.testing-server
+        required: false
+    command: php artisan horizon
+    restart: unless-stopped
+    volumes:
+      - testing-backend-storage:/var/www/html/storage
+      - testing-backend-cache:/var/www/html/bootstrap/cache
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - testing
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+      target: app
+    env_file:
+      - path: ./apps/backend/.env.testing-server
+        required: false
+    command: php artisan schedule:work
+    restart: unless-stopped
+    volumes:
+      - testing-backend-storage:/var/www/html/storage
+      - testing-backend-cache:/var/www/html/bootstrap/cache
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - testing
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-machine_error_helper_testing}
+      POSTGRES_USER: ${POSTGRES_USER:-app_testing}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-testing}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - testing-postgres-data:/var/lib/postgresql/data
+    networks:
+      - testing
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - testing-redis-data:/data
+    networks:
+      - testing
+
+volumes:
+  testing-backend-cache:
+  testing-backend-storage:
+  testing-postgres-data:
+  testing-redis-data:
+
+networks:
+  testing:
+    driver: bridge

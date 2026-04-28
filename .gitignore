@@ -6,6 +6,7 @@
 /apps/backend/vendor
 /apps/backend/node_modules
 /apps/backend/.env
+/apps/backend/.env.testing-server
 /apps/backend/.phpunit.result.cache
 /apps/backend/storage/*.key
 /apps/backend/storage/app/*
@@ -23,8 +24,10 @@
 
 /apps/mobile/node_modules
 /apps/mobile/.env
+/apps/mobile/.env.testing-server
 /apps/mobile/.expo
 /apps/mobile/dist
 
+/.env.testing-server
 /.phpunit.cache
 /.npm

@@ -128,6 +128,7 @@ For Android emulator development, set `EXPO_PUBLIC_API_URL=http://10.0.2.2:8090/
 - [Screenshot Processing](docs/screenshot-processing.md)
 - [API and Mobile Frontend](docs/api-and-mobile.md)
 - [Docker Plan](docs/docker-plan.md)
+- [Server Setup](docs/server-setup.md)
 - [Implementation Roadmap](docs/implementation-roadmap.md)
 - [Research Notes](docs/research-notes.md)
 
