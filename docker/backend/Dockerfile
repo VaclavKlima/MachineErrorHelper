@@ -21,7 +21,10 @@ RUN composer install \
     --no-progress \
     --no-scripts \
     --optimize-autoloader \
-    --prefer-dist
+    --prefer-dist \
+    --ignore-platform-req=ext-exif \
+    --ignore-platform-req=ext-intl \
+    --ignore-platform-req=ext-pcntl
 
 COPY apps/backend ./
 RUN composer dump-autoload --no-dev --no-interaction --optimize
