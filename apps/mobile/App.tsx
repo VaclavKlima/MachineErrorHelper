@@ -1121,23 +1121,6 @@ function formatPercent(value: number | null | undefined): string {
   return typeof value === 'number' ? `${Math.round(value * 100)}%` : 'n/a';
 }
 
-function statusLabel(status: string | undefined): string {
-  switch (status) {
-    case 'uploaded':
-      return 'Queued';
-    case 'processing':
-      return 'Processing';
-    case 'resolved':
-      return 'Resolved';
-    case 'needs_confirmation':
-      return 'Needs check';
-    case 'failed':
-      return 'Failed';
-    default:
-      return 'Ready';
-  }
-}
-
 function formatHistoryTimestamp(value: string | null): string {
   if (!value) {
     return 'Unknown time';
@@ -1711,8 +1694,8 @@ function ResultPanel({ detail }: { detail: DiagnosisDetail | null }) {
     <View style={styles.resultPanel}>
       <View style={styles.resultHeader}>
         <View>
-          <Text style={styles.kicker}>Diagnosis</Text>
-          <Text style={styles.resultTitle}>{statusLabel(detail.status)}</Text>
+          <Text style={styles.kicker}>Scan result</Text>
+          <Text style={styles.resultTitle}>{detail.machine?.name ?? 'Diagnosis'}</Text>
         </View>
         <Text style={styles.badge}>{detail.id.slice(-6)}</Text>
       </View>
@@ -1792,10 +1775,6 @@ function HistoryOverviewPanel({
           <View style={styles.scanOverviewMetaBlock}>
             <Text style={styles.detectedLabel}>Captured codes</Text>
             <Text style={styles.scanOverviewCodeValue}>{summaryCodes || 'No code captured'}</Text>
-          </View>
-          <View style={styles.scanOverviewMetaBlock}>
-            <Text style={styles.detectedLabel}>Status</Text>
-            <Text style={styles.scanOverviewMetaValue}>{statusLabel(detail?.status ?? item?.status)}</Text>
           </View>
         </View>
 
@@ -1901,17 +1880,6 @@ function DashboardHistoryRow({
       <View style={styles.dashboardHistoryRowTop}>
         <Text numberOfLines={1} style={styles.dashboardHistoryRowMachine}>
           {item.machine?.name ?? 'Unknown machine'}
-        </Text>
-        <Text
-          style={[
-            styles.dashboardHistoryRowStatus,
-            item.status === 'resolved' && styles.dashboardHistoryRowStatusResolved,
-            item.status === 'needs_confirmation' && styles.dashboardHistoryRowStatusNeedsCheck,
-            (item.status === 'uploaded' || item.status === 'processing') && styles.dashboardHistoryRowStatusPending,
-            item.status === 'failed' && styles.dashboardHistoryRowStatusFailed,
-          ]}
-        >
-          {statusLabel(item.status)}
         </Text>
       </View>
       <Text numberOfLines={1} style={styles.dashboardHistoryRowCode}>
@@ -2823,17 +2791,6 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
                             <View style={styles.scanHistoryCopy}>
                               <Text style={styles.scanHistoryMachine}>{item.machine?.name ?? 'Unknown machine'}</Text>
                             </View>
-                            <Text
-                              style={[
-                                styles.scanHistoryBadge,
-                                item.status === 'resolved' && styles.scanHistoryBadgeResolved,
-                                item.status === 'needs_confirmation' && styles.scanHistoryBadgeNeedsCheck,
-                                (item.status === 'uploaded' || item.status === 'processing') && styles.scanHistoryBadgePending,
-                                item.status === 'failed' && styles.scanHistoryBadgeFailed,
-                              ]}
-                            >
-                              {statusLabel(item.status)}
-                            </Text>
                           </View>
                           <Text style={styles.scanHistoryCodes}>{historyCodesLabel(item)}</Text>
                           {historyMatchLabel(item) ? <Text style={styles.scanHistoryMatch}>{historyMatchLabel(item)}</Text> : null}
@@ -3919,40 +3876,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0,
   },
-  dashboardHistoryRowStatus: {
-    backgroundColor: 'rgba(255, 255, 255, 0.055)',
-    borderColor: 'rgba(255, 255, 255, 0.14)',
-    borderRadius: 8,
-    borderWidth: 1,
-    color: '#c4cad6',
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 0,
-    overflow: 'hidden',
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    textTransform: 'uppercase',
-  },
-  dashboardHistoryRowStatusResolved: {
-    backgroundColor: 'rgba(102, 224, 173, 0.12)',
-    borderColor: 'rgba(102, 224, 173, 0.32)',
-    color: '#b9f0d5',
-  },
-  dashboardHistoryRowStatusNeedsCheck: {
-    backgroundColor: 'rgba(143, 183, 255, 0.12)',
-    borderColor: 'rgba(143, 183, 255, 0.32)',
-    color: '#d1e0ff',
-  },
-  dashboardHistoryRowStatusPending: {
-    backgroundColor: 'rgba(255, 214, 102, 0.12)',
-    borderColor: 'rgba(255, 214, 102, 0.28)',
-    color: '#ffe6a3',
-  },
-  dashboardHistoryRowStatusFailed: {
-    backgroundColor: 'rgba(255, 107, 61, 0.12)',
-    borderColor: 'rgba(255, 107, 61, 0.3)',
-    color: '#ffc1ae',
-  },
   dashboardHistoryRowCode: {
     color: '#f7f8fb',
     fontSize: 18,
@@ -4115,40 +4038,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     letterSpacing: 0,
-  },
-  scanHistoryBadge: {
-    backgroundColor: 'rgba(255, 255, 255, 0.055)',
-    borderColor: 'rgba(255, 255, 255, 0.14)',
-    borderRadius: 8,
-    borderWidth: 1,
-    color: '#c4cad6',
-    fontSize: 11,
-    fontWeight: '900',
-    letterSpacing: 0,
-    overflow: 'hidden',
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    textTransform: 'uppercase',
-  },
-  scanHistoryBadgeResolved: {
-    backgroundColor: 'rgba(102, 224, 173, 0.12)',
-    borderColor: 'rgba(102, 224, 173, 0.32)',
-    color: '#b9f0d5',
-  },
-  scanHistoryBadgeNeedsCheck: {
-    backgroundColor: 'rgba(143, 183, 255, 0.12)',
-    borderColor: 'rgba(143, 183, 255, 0.32)',
-    color: '#d1e0ff',
-  },
-  scanHistoryBadgePending: {
-    backgroundColor: 'rgba(255, 214, 102, 0.12)',
-    borderColor: 'rgba(255, 214, 102, 0.28)',
-    color: '#ffe6a3',
-  },
-  scanHistoryBadgeFailed: {
-    backgroundColor: 'rgba(255, 107, 61, 0.12)',
-    borderColor: 'rgba(255, 107, 61, 0.3)',
-    color: '#ffc1ae',
   },
   scanHistoryCodes: {
     color: '#f7f8fb',
