@@ -25,12 +25,35 @@ services:
       dockerfile: docker/backend/Dockerfile
       target: nginx
     restart: unless-stopped
-    ports:
-      - "${TESTING_HTTP_BIND:-127.0.0.1}:${TESTING_HTTP_PORT:-8092}:80"
     volumes:
       - testing-backend-storage:/var/www/html/storage:ro
     depends_on:
       backend:
+        condition: service_started
+    networks:
+      - testing
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+      args:
+        EXPO_PUBLIC_API_URL: ${TESTING_PUBLIC_API_URL}
+    restart: unless-stopped
+    networks:
+      - testing
+
+  edge:
+    image: nginx:1.29-alpine
+    restart: unless-stopped
+    ports:
+      - "${TESTING_HTTP_BIND:-127.0.0.1}:${TESTING_HTTP_PORT:-8092}:80"
+    volumes:
+      - ./docker/testing-edge/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      frontend:
+        condition: service_started
+      nginx:
         condition: service_started
     networks:
       - testing
@@ -40,7 +63,7 @@ services:
     command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TUNNEL_TOKEN}
     restart: unless-stopped
     depends_on:
-      nginx:
+      edge:
         condition: service_started
     networks:
       - testing

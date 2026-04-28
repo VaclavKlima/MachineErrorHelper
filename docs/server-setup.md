@@ -6,7 +6,7 @@ This project has three Docker environments:
 - Production server: `docker-compose.prod.yml`
 - Testing server: `docker-compose.testing.yml`
 
-The testing server is intended for a public subdomain through a Cloudflare Tunnel, for example `https://testing.example.com`. It uses its own Docker Compose project, Cloudflare connector container, and volumes, so testing data stays separate from production data.
+The testing server is intended for a public subdomain through a Cloudflare Tunnel, for example `https://machine.example.com`. It uses its own Docker Compose project, Cloudflare connector container, frontend container, backend containers, and volumes, so testing data stays separate from production data.
 
 ## Requirements
 
@@ -32,10 +32,10 @@ In Cloudflare Zero Trust:
 For the public hostname service, use:
 
 ```text
-http://nginx:80
+http://edge:80
 ```
 
-That hostname works because the `cloudflared` container and `nginx` container are on the same Docker network.
+That hostname works because the `cloudflared` container and `edge` container are on the same Docker network. The `edge` container routes frontend requests to the Expo web app and backend/admin/API requests to Laravel.
 
 Keep the compose HTTP port bound to `127.0.0.1`. It is only for direct server debugging. Public traffic should enter through the Cloudflare Tunnel container.
 
@@ -65,6 +65,7 @@ Edit both files before starting the stack.
 In root `.env.testing-server`, set the Cloudflare token:
 
 ```env
+TESTING_PUBLIC_API_URL=https://machine.example.com/api
 CLOUDFLARED_TUNNEL_TOKEN=your-cloudflare-testing-tunnel-token
 ```
 
@@ -83,7 +84,7 @@ chmod +x scripts/testing-up.sh scripts/testing-redeploy.sh
 ./scripts/testing-up.sh
 ```
 
-This starts PostgreSQL, Redis, Laravel PHP-FPM, nginx, workers, scheduler, and the Cloudflare Tunnel connector.
+This starts PostgreSQL, Redis, Laravel PHP-FPM, backend nginx, Expo web frontend nginx, edge nginx, workers, scheduler, and the Cloudflare Tunnel connector.
 
 Create the default admin user:
 
@@ -129,6 +130,7 @@ Used by Docker Compose before containers start.
 | `COMPOSE_PROJECT_NAME` | Yes | `machine-error-helper-testing` | Keeps container, network, and volume names separate from production. |
 | `TESTING_HTTP_BIND` | Yes | `127.0.0.1` | Local-only debug bind for nginx. Public traffic uses the `cloudflared` container. |
 | `TESTING_HTTP_PORT` | Yes | `8092` | Local-only debug port on the server. |
+| `TESTING_PUBLIC_API_URL` | Yes | `https://machine.example.com/api` | API URL embedded into the production Expo web build. |
 | `CLOUDFLARED_TUNNEL_TOKEN` | Yes | Cloudflare token | Token copied from the Cloudflare Docker connector setup. |
 | `POSTGRES_DB` | Yes | `machine_error_helper_testing` | Must match backend `DB_DATABASE`. |
 | `POSTGRES_USER` | Yes | `app_testing` | Must match backend `DB_USERNAME`. |
@@ -174,7 +176,7 @@ Used when building or running the Expo app against the testing server.
 
 | Variable | Required | Example | Notes |
 | --- | --- | --- | --- |
-| `EXPO_PUBLIC_API_URL` | Yes | `https://testing.example.com/api` | Public API URL that the mobile/web app calls. |
+| `EXPO_PUBLIC_API_URL` | Yes | `https://machine.example.com/api` | Public API URL that the mobile/web app calls. For the Docker testing stack, this is set through root `TESTING_PUBLIC_API_URL`. |
 
 For local mobile testing against the server:
 
@@ -262,5 +264,5 @@ EXPO_PUBLIC_API_URL=http://10.0.2.2:8090/api
 - Do not commit real `.env` files. Only commit `*.example` files.
 - Keep testing and production database passwords different.
 - Keep testing and production `APP_KEY` values different.
-- Point the public tunnel to the nginx service port, not to PHP-FPM.
-- For the Docker Cloudflare connector, the tunnel service URL is `http://nginx:80`, not `http://127.0.0.1:8092`.
+- Point the public tunnel to the edge router, not directly to PHP-FPM or backend nginx.
+- For the Docker Cloudflare connector, the tunnel service URL is `http://edge:80`, not `http://127.0.0.1:8092`.
