@@ -317,8 +317,8 @@ const diagnosisCandidateSchema = z
     id: z.number(),
     candidate_code: z.string().nullable(),
     normalized_code: z.string().nullable(),
-    source: z.string().nullable(),
-    confidence: z.number().nullable(),
+    source: z.string().nullable().optional(),
+    confidence: z.number().nullable().optional(),
     metadata: z.record(z.string(), z.unknown()).nullable().optional(),
     matched_diagnostic_entry: diagnosticEntrySchema.nullable().optional(),
     dashboard_color_meaning: dashboardColorMeaningSchema.nullable().optional(),
@@ -350,6 +350,7 @@ const diagnosisHistoryItemSchema = z
     selected_diagnostic_entry: diagnosticEntrySchema.nullable(),
     ai_detected_codes: z.array(z.string()),
     user_entered_codes: z.array(z.string()),
+    candidates: z.array(diagnosisCandidateSchema).optional().default([]),
     screenshot_url: z.string().nullable(),
   })
   .passthrough();
@@ -372,6 +373,10 @@ type ScreenshotPreviewSource = {
   height?: number | null;
   uri: string;
   width?: number | null;
+};
+type HistoryCodeChip = {
+  code: string;
+  colorMeaning: DashboardColorMeaning | null;
 };
 type AppPage = 'dashboard' | 'machines' | 'diagnosis' | 'history' | 'history-detail';
 type DiagnosisStep = 'upload' | 'confirm' | 'result';
@@ -417,11 +422,16 @@ function authHeaders(token: string): Record<string, string> {
 }
 
 function resolveAssetUrl(url: string): string {
-  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) {
-    return url;
+  const apiOrigin = apiBaseUrl.replace(/\/api\/?$/, '');
+  const malformedLocalStorageUrl = url.match(/^https?:\/+(storage\/.*)$/i);
+
+  if (malformedLocalStorageUrl) {
+    return new URL(`/${malformedLocalStorageUrl[1]}`, `${apiOrigin}/`).toString();
   }
 
-  const apiOrigin = apiBaseUrl.replace(/\/api\/?$/, '');
+  if (/^(?:https?:\/\/|blob:|data:|file:)/i.test(url)) {
+    return url;
+  }
 
   return new URL(url, `${apiOrigin}/`).toString();
 }
@@ -856,6 +866,23 @@ function ScreenshotViewer({ source }: { source: ScreenshotPreviewSource }) {
     setZoom(1);
   }
 
+  function renderImage(style: object) {
+    if (Platform.OS === 'web') {
+      return createElement('img', {
+        alt: 'Uploaded screenshot',
+        src: source.uri,
+        style: {
+          display: 'block',
+          height: '100%',
+          objectFit: 'contain',
+          width: '100%',
+        },
+      });
+    }
+
+    return <RNImage source={{ uri: source.uri }} resizeMode="contain" style={style} />;
+  }
+
   return (
     <>
       <View style={styles.screenshotCard}>
@@ -876,7 +903,9 @@ function ScreenshotViewer({ source }: { source: ScreenshotPreviewSource }) {
           onPress={openViewer}
           style={({ pressed }) => [styles.screenshotPreviewFrame, pressed && styles.buttonPressed]}
         >
-          <RNImage source={{ uri: source.uri }} resizeMode="contain" style={[styles.screenshotPreviewImage, { height: previewHeight }]} />
+          <View style={[styles.screenshotPreviewImage, { height: previewHeight }]}>
+            {renderImage(styles.screenshotPreviewNativeImage)}
+          </View>
           <View style={styles.screenshotPreviewFooter}>
             <PressableCue label="Tap to zoom" />
           </View>
@@ -930,7 +959,7 @@ function ScreenshotViewer({ source }: { source: ScreenshotPreviewSource }) {
               >
                 <ScrollView contentContainerStyle={[styles.imageViewerVerticalContent, { minHeight: modalViewportHeight }]}>
                   <View style={[styles.imageViewerImageFrame, { height: zoomedHeight, width: zoomedWidth }]}>
-                    <RNImage source={{ uri: source.uri }} resizeMode="contain" style={styles.imageViewerImage} />
+                    {renderImage(styles.imageViewerImage)}
                   </View>
                 </ScrollView>
               </ScrollView>
@@ -1141,14 +1170,92 @@ function formatHistoryTimestamp(value: string | null): string {
   return `${day}/${month}/${year} ${hours}:${minutes}`;
 }
 
-function historyCodesLabel(item: DiagnosisHistoryItem): string {
+function codeFromCandidate(candidate: DiagnosisCandidate): string {
+  return candidate.candidate_code ?? candidate.normalized_code ?? '';
+}
+
+function historyCodeChips(item: DiagnosisHistoryItem | null, detail: DiagnosisDetail | null = null): HistoryCodeChip[] {
+  const candidates = detail?.candidates?.length ? detail.candidates : item?.candidates ?? [];
+  const candidateChips = candidates
+    .map((candidate) => ({
+      code: codeFromCandidate(candidate),
+      colorMeaning: candidateColorMeaning(candidate),
+    }))
+    .filter((chip) => chip.code !== '');
+
+  if (candidateChips.length > 0) {
+    return candidateChips;
+  }
+
+  if (!item) {
+    return [];
+  }
+
   const codes = item.user_entered_codes.length > 0 ? item.user_entered_codes : item.ai_detected_codes;
 
   if (codes.length > 0) {
-    return codes.join(' ');
+    return codes.map((code) => ({ code, colorMeaning: null }));
   }
 
-  return item.selected_diagnostic_entry?.primary_code ?? 'No code captured';
+  const fallbackCode = item.selected_diagnostic_entry?.primary_code;
+
+  return fallbackCode ? [{ code: fallbackCode, colorMeaning: null }] : [];
+}
+
+function normalizeHexColor(value: string | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+
+  if (/^#[0-9a-f]{6}$/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  if (/^#[0-9a-f]{3}$/i.test(trimmed)) {
+    const [, red, green, blue] = trimmed;
+
+    return `#${red}${red}${green}${green}${blue}${blue}`;
+  }
+
+  return null;
+}
+
+function hexToRgb(hex: string): { blue: number; green: number; red: number } | null {
+  const normalized = normalizeHexColor(hex);
+
+  if (!normalized) {
+    return null;
+  }
+
+  return {
+    red: Number.parseInt(normalized.slice(1, 3), 16),
+    green: Number.parseInt(normalized.slice(3, 5), 16),
+    blue: Number.parseInt(normalized.slice(5, 7), 16),
+  };
+}
+
+function rgbaFromHex(hex: string, alpha: number): string {
+  const rgb = hexToRgb(hex);
+
+  if (!rgb) {
+    return `rgba(143, 183, 255, ${alpha})`;
+  }
+
+  return `rgba(${rgb.red}, ${rgb.green}, ${rgb.blue}, ${alpha})`;
+}
+
+function textColorForHex(hex: string): string {
+  const rgb = hexToRgb(hex);
+
+  if (!rgb) {
+    return '#f7f8fb';
+  }
+
+  const luminance = (0.2126 * rgb.red + 0.7152 * rgb.green + 0.0722 * rgb.blue) / 255;
+
+  return luminance > 0.58 ? '#111827' : '#ffffff';
 }
 
 function historyMatchLabel(item: DiagnosisHistoryItem): string | null {
@@ -1733,8 +1840,8 @@ function HistoryOverviewPanel({
   detail: DiagnosisDetail | null;
   item: DiagnosisHistoryItem | null;
 }) {
-  const summaryCodes = item ? historyCodesLabel(item) : '';
   const matchedLabel = item ? historyMatchLabel(item) : null;
+  const codeChips = historyCodeChips(item, detail);
   const machineLabel = item?.machine ? [item.machine.name, item.machine.manufacturer, item.machine.model_number].filter(Boolean).join(' · ') : null;
   const screenshotSource = detail?.screenshot_url
     ? {
@@ -1774,7 +1881,7 @@ function HistoryOverviewPanel({
         <View style={styles.scanOverviewMetaRow}>
           <View style={styles.scanOverviewMetaBlock}>
             <Text style={styles.detectedLabel}>Captured codes</Text>
-            <Text style={styles.scanOverviewCodeValue}>{summaryCodes || 'No code captured'}</Text>
+            <HistoryCodeChips chips={codeChips} size="large" />
           </View>
         </View>
 
@@ -1797,6 +1904,51 @@ function PressableCue({ label }: { label: string }) {
     <View style={styles.pressableCue}>
       <Text style={styles.pressableCueText}>{label}</Text>
       <Text style={styles.pressableCueArrow}>›</Text>
+    </View>
+  );
+}
+
+function HistoryCodeChips({
+  chips,
+  emptyLabel = 'No code captured',
+  size = 'default',
+}: {
+  chips: HistoryCodeChip[];
+  emptyLabel?: string;
+  size?: 'default' | 'large';
+}) {
+  if (chips.length === 0) {
+    return <Text style={size === 'large' ? styles.scanOverviewCodeValue : styles.scanHistoryCodes}>{emptyLabel}</Text>;
+  }
+
+  return (
+    <View style={[styles.historyCodeChipRow, size === 'large' && styles.historyCodeChipRowLarge]}>
+      {chips.map((chip, index) => {
+        const hexColor = normalizeHexColor(chip.colorMeaning?.hex_color);
+        const chipStyle = hexColor
+          ? {
+              backgroundColor: rgbaFromHex(hexColor, 0.18),
+              borderColor: rgbaFromHex(hexColor, 0.62),
+              shadowColor: hexColor,
+            }
+          : null;
+        const textStyle = hexColor ? { color: '#f7f8fb' } : null;
+
+        return (
+          <View
+            key={`${chip.code}-${chip.colorMeaning?.id ?? 'none'}-${index}`}
+            style={[
+              styles.historyCodeChip,
+              size === 'large' && styles.historyCodeChipLarge,
+              chipStyle,
+            ]}
+          >
+            <Text numberOfLines={1} style={[styles.historyCodeChipText, size === 'large' && styles.historyCodeChipTextLarge, textStyle]}>
+              {chip.code}
+            </Text>
+          </View>
+        );
+      })}
     </View>
   );
 }
@@ -1870,6 +2022,8 @@ function DashboardHistoryRow({
   item: DiagnosisHistoryItem;
   onPress: (item: DiagnosisHistoryItem) => void;
 }) {
+  const codeChips = historyCodeChips(item);
+
   return (
     <Pressable
       accessibilityHint="Open scan overview"
@@ -1882,9 +2036,7 @@ function DashboardHistoryRow({
           {item.machine?.name ?? 'Unknown machine'}
         </Text>
       </View>
-      <Text numberOfLines={1} style={styles.dashboardHistoryRowCode}>
-        {historyCodesLabel(item)}
-      </Text>
+      <HistoryCodeChips chips={codeChips} />
       <View style={styles.dashboardHistoryRowFooter}>
         <Text numberOfLines={1} style={styles.dashboardHistoryRowMeta}>
           {formatHistoryTimestamp(item.created_at)}
@@ -2792,7 +2944,7 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
                               <Text style={styles.scanHistoryMachine}>{item.machine?.name ?? 'Unknown machine'}</Text>
                             </View>
                           </View>
-                          <Text style={styles.scanHistoryCodes}>{historyCodesLabel(item)}</Text>
+                          <HistoryCodeChips chips={historyCodeChips(item)} />
                           {historyMatchLabel(item) ? <Text style={styles.scanHistoryMatch}>{historyMatchLabel(item)}</Text> : null}
                           <View style={styles.scanHistoryRowFooter}>
                             <Text numberOfLines={1} style={styles.scanHistoryMeta}>
@@ -3025,12 +3177,25 @@ function MachineErrorHelper({ authToken, authUser, onLogout }: { authToken: stri
                     </Pressable>
                   </View>
 
-                  {diagnosis.isLoading ? (
+                  {diagnosis.isLoading && selectedHistoryItem ? (
+                    <View style={styles.stateBox}>
+                      <ActivityIndicator color="#8fb7ff" />
+                      <Text style={styles.stateText}>Loading scan details</Text>
+                    </View>
+                  ) : null}
+
+                  {diagnosis.error && selectedHistoryItem ? (
+                    <View style={styles.stateBox}>
+                      <Text style={styles.error}>{diagnosis.error.message}</Text>
+                    </View>
+                  ) : null}
+
+                  {diagnosis.isLoading && !selectedHistoryItem ? (
                     <View style={styles.stateBox}>
                       <ActivityIndicator color="#8fb7ff" />
                       <Text style={styles.stateText}>Loading scan overview</Text>
                     </View>
-                  ) : diagnosis.error ? (
+                  ) : diagnosis.error && !selectedHistoryItem ? (
                     <View style={styles.stateBox}>
                       <Text style={styles.error}>{diagnosis.error.message}</Text>
                     </View>
@@ -3876,11 +4041,45 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0,
   },
-  dashboardHistoryRowCode: {
+  historyCodeChipRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  historyCodeChipRowLarge: {
+    marginTop: 5,
+  },
+  historyCodeChip: {
+    backgroundColor: 'rgba(143, 183, 255, 0.1)',
+    borderColor: 'rgba(143, 183, 255, 0.3)',
+    borderRadius: 6,
+    borderWidth: 1,
+    maxWidth: '100%',
+    minHeight: 25,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    shadowColor: '#8fb7ff',
+    shadowOffset: { height: 2, width: 0 },
+    shadowOpacity: 0.1,
+    shadowRadius: 5,
+    elevation: 1,
+  },
+  historyCodeChipLarge: {
+    minHeight: 29,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+  },
+  historyCodeChipText: {
     color: '#f7f8fb',
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: '900',
     letterSpacing: 0,
+    lineHeight: 18,
+  },
+  historyCodeChipTextLarge: {
+    fontSize: 17,
+    lineHeight: 20,
   },
   dashboardHistoryRowMeta: {
     color: '#99a3b5',
@@ -4275,6 +4474,11 @@ const styles = StyleSheet.create({
   },
   screenshotPreviewImage: {
     backgroundColor: 'rgba(255, 255, 255, 0.02)',
+    overflow: 'hidden',
+    width: '100%',
+  },
+  screenshotPreviewNativeImage: {
+    height: '100%',
     width: '100%',
   },
   screenshotPreviewFooter: {

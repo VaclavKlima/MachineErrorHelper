@@ -2,6 +2,8 @@
 
 namespace Tests\Feature;
 
+use App\Models\DashboardColorMeaning;
+use App\Models\DiagnosisCandidate;
 use App\Models\DiagnosisRequest;
 use App\Models\DiagnosticEntry;
 use App\Models\Machine;
@@ -37,6 +39,14 @@ class DiagnosisHistoryApiTest extends TestCase
             'meaning' => 'Pressure warning.',
             'status' => 'active',
         ]);
+        $warningColor = DashboardColorMeaning::query()->create([
+            'machine_id' => $machine->id,
+            'label' => 'Warning',
+            'hex_color' => '#F59E0B',
+            'description' => 'Machine is showing a warning state.',
+            'priority' => 10,
+            'is_active' => true,
+        ]);
 
         $olderDiagnosis = DiagnosisRequest::query()->create([
             'machine_id' => $machine->id,
@@ -62,6 +72,15 @@ class DiagnosisHistoryApiTest extends TestCase
             'created_at' => Carbon::parse('2026-04-21 17:45:00'),
             'updated_at' => Carbon::parse('2026-04-21 17:45:00'),
         ])->save();
+        DiagnosisCandidate::query()->create([
+            'diagnosis_request_id' => $newerDiagnosis->id,
+            'candidate_code' => '251',
+            'normalized_code' => '251',
+            'source' => 'gemini_screenshot',
+            'confidence' => 0.91,
+            'dashboard_color_meaning_id' => $warningColor->id,
+            'metadata' => ['color_status_label' => 'Warning'],
+        ]);
 
         DiagnosisRequest::query()->create([
             'machine_id' => $machine->id,
@@ -78,6 +97,10 @@ class DiagnosisHistoryApiTest extends TestCase
             ->assertJsonPath('data.0.id', $newerDiagnosis->public_id)
             ->assertJsonPath('data.0.machine.name', 'Plug SA')
             ->assertJsonPath('data.0.ai_detected_codes.0', '251')
+            ->assertJsonPath('data.0.candidates.0.candidate_code', '251')
+            ->assertJsonPath('data.0.candidates.0.source', 'gemini_screenshot')
+            ->assertJsonPath('data.0.candidates.0.confidence', 0.91)
+            ->assertJsonPath('data.0.candidates.0.dashboard_color_meaning.hex_color', '#F59E0B')
             ->assertJsonPath('data.1.id', $olderDiagnosis->public_id)
             ->assertJsonPath('data.1.selected_diagnostic_entry.primary_code', '250');
     }

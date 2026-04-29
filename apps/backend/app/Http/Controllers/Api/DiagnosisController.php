@@ -21,6 +21,9 @@ class DiagnosisController extends Controller
             ->with([
                 'machine:id,name,slug,manufacturer,model_number',
                 'selectedDiagnosticEntry:id,machine_id,module_key,primary_code,title',
+                'candidates' => fn ($query) => $query
+                    ->select('id', 'diagnosis_request_id', 'candidate_code', 'normalized_code', 'source', 'confidence', 'dashboard_color_meaning_id', 'metadata')
+                    ->with('dashboardColorMeaning:id,label,ai_key,hex_color,description,priority'),
             ])
             ->latest()
             ->limit(20)
@@ -36,6 +39,7 @@ class DiagnosisController extends Controller
                 'selected_diagnostic_entry' => $diagnosis->selectedDiagnosticEntry,
                 'ai_detected_codes' => $diagnosis->ai_detected_codes ?? [],
                 'user_entered_codes' => $diagnosis->user_entered_codes ?? [],
+                'candidates' => $diagnosis->candidates,
                 'screenshot_url' => $diagnosis->screenshot_url,
             ])->values()->all(),
         ]);
