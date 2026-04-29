@@ -2061,9 +2061,29 @@ function ErrorPreviewCard({
   const documentations = getEntryDocumentations(entry);
   const colorMeaning = candidateColorMeaning(candidate);
   const colorAccent = colorMeaning?.hex_color ?? '#8fb7ff';
+  const normalizedColorAccent = normalizeHexColor(colorAccent) ?? '#8fb7ff';
+
+  function renderColorWash() {
+    if (Platform.OS === 'web') {
+      return createElement('div', {
+        style: {
+          background: `linear-gradient(90deg, ${rgbaFromHex(normalizedColorAccent, 0.16)} 0%, ${rgbaFromHex(normalizedColorAccent, 0.06)} 34%, rgba(255, 255, 255, 0) 100%)`,
+          bottom: 0,
+          left: 0,
+          pointerEvents: 'none',
+          position: 'absolute',
+          right: 0,
+          top: 0,
+        },
+      });
+    }
+
+    return <View pointerEvents="none" style={[styles.matchCardColorWash, { backgroundColor: rgbaFromHex(normalizedColorAccent, 0.08) }]} />;
+  }
 
   return (
-    <View style={[styles.matchCard, { borderLeftColor: colorAccent }]}>
+    <View style={[styles.matchCard, { borderLeftColor: normalizedColorAccent }]}>
+      {renderColorWash()}
       <View style={styles.matchCardHeader}>
         <View>
           <Text style={styles.matchCode}>{code}</Text>
@@ -4882,7 +4902,16 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderLeftWidth: 5,
     borderWidth: 1,
+    overflow: 'hidden',
     padding: 12,
+    position: 'relative',
+  },
+  matchCardColorWash: {
+    bottom: 0,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 0,
   },
   matchCardHeader: {
     alignItems: 'center',
