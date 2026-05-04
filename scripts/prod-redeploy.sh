@@ -14,6 +14,7 @@ run git pull --ff-only
 section "Building and restarting production containers"
 info "Production images are rebuilt from the checked-out source. Containers are replaced only after the build succeeds."
 run prod_compose up -d --build --remove-orphans
+run prod_compose restart nginx
 
 run_prod_release_tasks
 

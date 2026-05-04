@@ -14,6 +14,7 @@ run git pull --ff-only
 section "Building and restarting testing containers"
 info "Testing images are rebuilt from the checked-out source. Containers are replaced only after the build succeeds."
 run testing_compose up -d --build --remove-orphans
+run testing_compose restart nginx edge
 
 run_testing_release_tasks
 

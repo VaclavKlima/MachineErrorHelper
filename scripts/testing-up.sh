@@ -10,6 +10,7 @@ check_testing_env
 section "Starting testing environment"
 info "Building testing images and starting isolated testing containers."
 run testing_compose up -d --build --remove-orphans
+run testing_compose restart nginx edge
 
 run_testing_release_tasks
 
