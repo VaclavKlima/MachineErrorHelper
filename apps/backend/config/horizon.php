@@ -226,6 +226,14 @@ return [
                 'maxProcesses' => 3,
             ],
         ],
+
+        'testing-server' => [
+            'supervisor-1' => [
+                'maxProcesses' => 3,
+                'balanceMaxShift' => 1,
+                'balanceCooldown' => 3,
+            ],
+        ],
     ],
 
     /*
