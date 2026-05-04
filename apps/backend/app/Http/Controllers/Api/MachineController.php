@@ -50,10 +50,17 @@ class MachineController extends Controller
 
         $request->user()->machines()->syncWithoutDetaching([$machine->id]);
 
+        $machine->load(['dashboardColorMeanings' => fn ($query) => $query->where('is_active', true)->orderBy('priority')->orderBy('label')]);
+
         return response()->json([
-            'data' => $machine
-                ->load(['dashboardColorMeanings' => fn ($query) => $query->where('is_active', true)->orderBy('priority')->orderBy('label')])
-                ->only(['id', 'name', 'slug', 'manufacturer', 'model_number', 'dashboard_color_meanings']),
+            'data' => [
+                'id' => $machine->id,
+                'name' => $machine->name,
+                'slug' => $machine->slug,
+                'manufacturer' => $machine->manufacturer,
+                'model_number' => $machine->model_number,
+                'dashboard_color_meanings' => $machine->dashboardColorMeanings->values(),
+            ],
         ], 201);
     }
 

@@ -281,7 +281,7 @@ const machineSchema = z.object({
   slug: z.string(),
   manufacturer: z.string().nullable(),
   model_number: z.string().nullable(),
-  dashboard_color_meanings: z.array(dashboardColorMeaningSchema).optional().default([]),
+  dashboard_color_meanings: z.array(dashboardColorMeaningSchema).nullish().transform((value) => value ?? []),
 }).passthrough();
 
 const machinesResponseSchema = z.object({
