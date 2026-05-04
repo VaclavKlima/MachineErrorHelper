@@ -76,7 +76,7 @@ services:
     env_file:
       - path: ./apps/backend/.env.testing-server
         required: false
-    command: php artisan horizon
+    command: sh -lc 'php artisan queue:work redis --queue=default,manual-import,screenshot-diagnosis --sleep=3 --tries=1 --timeout="$${HORIZON_JOB_TIMEOUT:-3600}"'
     restart: unless-stopped
     volumes:
       - testing-backend-storage:/var/www/html/storage
