@@ -25,7 +25,7 @@ import type { NativeSyntheticEvent, TextInputKeyPressEventData } from 'react-nat
 import { z } from 'zod';
 
 const queryClient = new QueryClient();
-const apiBaseUrl = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8090/api';
+const apiBaseUrl = normalizeApiBaseUrl(process.env.EXPO_PUBLIC_API_URL);
 const authTokenStorageKey = 'machine-error-helper.auth-token';
 const selectedMachineStoragePrefix = 'machine-error-helper.selected-machine';
 const cloudInputRange = [0, 0.25, 0.5, 0.75, 1];
@@ -61,6 +61,16 @@ type CanvasDotSpec = {
   height: number;
   width: number;
 };
+
+function normalizeApiBaseUrl(value: string | undefined): string {
+  const trimmed = value?.trim().replace(/\/+$/, '');
+
+  if (trimmed) {
+    return trimmed;
+  }
+
+  return Platform.OS === 'web' ? '/api' : 'http://localhost:8090/api';
+}
 
 function seededNoise(row: number, column: number, phase: number): number {
   const value = Math.sin(column * 12.9898 + row * 78.233 + phase * 37.719) * 43758.5453;
